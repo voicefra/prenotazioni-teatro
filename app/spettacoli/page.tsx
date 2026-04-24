@@ -35,6 +35,9 @@ interface TeatroRow {
   posti_per_fila: number
 }
 
+const FISCAL_DISCLAIMER =
+  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
+
 function capienzaTeatro(teatro: TeatroRow | null): number {
   if (!teatro) return 0
   const nf = Math.floor(Number(teatro.numero_file))
@@ -271,6 +274,7 @@ function SpettacoliContent() {
           <p className="text-sm md:text-base text-muted-foreground mt-2">
             Seleziona uno spettacolo per iniziare la prenotazione.
           </p>
+          <small className="mt-3 block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
         </div>
 
         {isLoading && (
@@ -296,31 +300,44 @@ function SpettacoliContent() {
             {spettacoli.map((spettacolo) => (
               <article
                 key={spettacolo.id}
-                className="rounded-2xl overflow-hidden border border-border bg-card/30 flex flex-col"
+                className="rounded-2xl overflow-hidden border border-border bg-card/30 flex h-full flex-col"
               >
-                <div className="aspect-[3/4] w-full bg-muted/30">
-                  {spettacolo.locandina_url ? (
-                    <img
-                      src={spettacolo.locandina_url}
-                      alt={`Locandina ${spettacolo.nome_spettacolo}`}
-                      className="h-full w-full object-cover"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="h-full w-full flex items-center justify-center text-sm text-muted-foreground">
-                      Nessuna locandina
-                    </div>
-                  )}
+                <div className="w-full p-4 pb-0">
+                  <div className="h-80 w-full overflow-hidden rounded-xl bg-muted/30">
+                    {spettacolo.locandina_url ? (
+                      <img
+                        src={spettacolo.locandina_url}
+                        alt={`Locandina ${spettacolo.nome_spettacolo}`}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
+                        Nessuna locandina
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="p-4 flex-1 flex flex-col">
-                  <h2 className="text-lg font-semibold text-foreground">{spettacolo.nome_spettacolo}</h2>
-                  {spettacolo.nome_teatro && <p className="mt-1 text-sm text-muted-foreground">Teatro: {spettacolo.nome_teatro}</p>}
-                  {spettacolo.ente_organizzatore && (
-                    <p className="mt-1 text-sm text-muted-foreground">Organizzato da: {spettacolo.ente_organizzatore}</p>
-                  )}
+                  <div className="min-h-28 space-y-2">
+                    <h2 className="max-h-16 overflow-hidden text-xl font-bold text-foreground">
+                      {spettacolo.nome_spettacolo}
+                    </h2>
+                    {spettacolo.nome_teatro && (
+                      <p className="truncate text-sm text-muted-foreground">
+                        <span className="font-semibold text-foreground">Teatro:</span> {spettacolo.nome_teatro}
+                      </p>
+                    )}
+                    {spettacolo.ente_organizzatore && (
+                      <p className="truncate text-sm text-muted-foreground">
+                        <span className="font-semibold text-foreground">Organizzato da:</span>{" "}
+                        {spettacolo.ente_organizzatore}
+                      </p>
+                    )}
+                  </div>
 
-                  <div className="mt-3">
+                  <div className="mt-4 flex-1">
                     <h3 className="text-sm font-medium text-foreground">Date disponibili</h3>
 
                     {spettacolo.repliche.length === 0 ? (
@@ -334,8 +351,12 @@ function SpettacoliContent() {
                           >
                             <div className="text-sm text-muted-foreground min-w-0 flex-1 space-y-1">
                               <p>
-                                <span className="font-medium text-foreground">Data e orario: </span>
-                                {replica.data_evento_label}, {replica.orario_label}
+                                <span className="font-semibold text-foreground">Data:</span>{" "}
+                                {replica.data_evento_label}
+                              </p>
+                              <p>
+                                <span className="font-semibold text-foreground">Orario:</span>{" "}
+                                {replica.orario_label}
                               </p>
                             </div>
                             {replica.isSoldOut ? (
@@ -364,6 +385,11 @@ function SpettacoliContent() {
           </div>
         )}
       </div>
+      <footer className="border-t border-border/60 bg-card/20 px-4 py-4">
+        <div className="container mx-auto">
+          <small className="block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
+        </div>
+      </footer>
     </main>
   )
 }

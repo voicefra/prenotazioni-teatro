@@ -27,6 +27,9 @@ export type TicketPdfInput = {
   ticketScanUrl: string
 }
 
+const FISCAL_DISCLAIMER =
+  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
+
 const styles = StyleSheet.create({
   page: {
     padding: 26,
@@ -182,6 +185,7 @@ function TicketPage({
   return (
     <Page size="A4" style={styles.page}>
       <View style={styles.header}>
+        <Text style={styles.subtitle}>Ricevuta di Prenotazione</Text>
         <Text style={styles.title}>{spettacolo}</Text>
         <Text style={styles.subtitle}>Organizzato da: {enteOrganizzatore || "Dati non disponibili"}</Text>
       </View>
@@ -211,7 +215,7 @@ function TicketPage({
             <Text style={styles.label}>Orario</Text>
             <Text style={styles.value}>{orario}</Text>
           </View>
-          <Text style={styles.sectionTitle}>Riepilogo posti acquistati</Text>
+          <Text style={styles.sectionTitle}>Riepilogo prenotazione</Text>
           <View style={styles.table}>
             <View style={styles.tableHeader}>
               <Text style={styles.colSeat}>Posto</Text>
@@ -235,23 +239,26 @@ function TicketPage({
       </View>
 
       <Text style={styles.footer}>
-        NOTE LEGALI: L'Organizzatore effettua la vendita dei Titoli di Ingresso in nome e per conto di se stesso. Il
-        contratto relativo all’acquisto dei Titoli di Ingresso si intende pertanto concluso direttamente tra il Cliente
-        e l’Organizzatore. La nostra Associazione agisce esclusivamente come intermediario tecnologico per la gestione
+        DICHIARAZIONE FISCALE: {FISCAL_DISCLAIMER}
+      </Text>
+      <Text style={styles.footer}>
+        NOTE LEGALI: L'Organizzatore gestisce i Titoli di Accesso in nome e per conto di se stesso. Il contratto
+        relativo alla prenotazione dei Titoli di Accesso si intende pertanto concluso direttamente tra il Cliente e
+        l’Organizzatore. La nostra Associazione agisce esclusivamente come intermediario tecnologico per la gestione
         della piattaforma di prenotazione.
       </Text>
       <Text style={styles.footer}>
         TERMINI E CONDIZIONI: Si informa il gentile pubblico che, ai sensi dell’art. 59, lett. n) del D.Lgs. 206/2005
         (Codice del Consumo), il diritto di recesso non si applica ai contratti riguardanti la fornitura di servizi
         relativi al tempo libero, qualora il contratto preveda una data o un periodo di esecuzione specifici. Pertanto,
-        una volta acquistato, il Titolo di Ingresso non è rimborsabile. L'Organizzatore si riserva il diritto di
+        una volta confermata la prenotazione, il Titolo di Accesso non è rimborsabile. L'Organizzatore si riserva il diritto di
         apportare modifiche al programma per cause di forza maggiore.
       </Text>
       <Text style={styles.footer}>
         TRATTAMENTO DATI PERSONALI (Informativa Privacy): I dati personali raccolti tramite questa piattaforma sono
         trattati dall'Organizzatore in qualità di Titolare del trattamento, nel pieno rispetto del Regolamento UE
         2016/679 (GDPR). I dati sono raccolti esclusivamente per finalità legate alla gestione della prenotazione,
-        all'invio del Titolo di Ingresso e agli obblighi contabili/fiscali previsti dalla legge. I dati non saranno
+        all'invio del Titolo di Accesso e agli obblighi contabili/fiscali previsti dalla legge. I dati non saranno
         ceduti a terzi. L'interessato può esercitare in ogni momento i propri diritti (accesso, rettifica,
         cancellazione) contattando l'Organizzatore all'indirizzo email indicato in fattura o sul sito.
       </Text>

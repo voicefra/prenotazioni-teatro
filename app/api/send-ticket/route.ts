@@ -72,6 +72,16 @@ type TeatroRow = {
   telefono?: string | null
 }
 
+const FISCAL_DISCLAIMER =
+  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
+
+function formatSenderFromAddress(rawFrom: string): string {
+  const trimmed = rawFrom.trim()
+  const m = trimmed.match(/<([^>]+)>/)
+  const emailAddress = (m?.[1] ?? trimmed).trim()
+  return `Prenotazioni Teatro <${emailAddress}>`
+}
+
 export async function POST(request: Request) {
   try {
     const resendKey = process.env.RESEND_API_KEY
@@ -144,8 +154,8 @@ export async function POST(request: Request) {
     const spettacoloRow = (spettacoloData ?? null) as SpettacoloRow | null
     const spettacoloNome = String(spettacoloRow?.nome_spettacolo ?? "Spettacolo")
     const enteOrganizzatore = String(spettacoloRow?.ente_organizzatore ?? "").trim() || "Dati non disponibili"
-    const prezzoBiglietto = Number(spettacoloRow?.prezzo_biglietto ?? 0)
-    const dirittiPrevendita = Number(spettacoloRow?.diritti_prevendita ?? 0)
+    const prezzoPrenotazione = Number(spettacoloRow?.prezzo_biglietto ?? 0)
+    const dirittiPrenotazione = Number(spettacoloRow?.diritti_prevendita ?? 0)
 
     let teatroInfo: TeatroRow | null = null
     const teatroId = String(spettacoloRow?.teatro_id ?? "").trim()
@@ -197,7 +207,7 @@ export async function POST(request: Request) {
     const normalizedRequestedSeats = seats.map((seat) => String(seat).trim().toUpperCase()).filter(Boolean)
     const uniqueRequestedSeats = [...new Set(normalizedRequestedSeats)]
     if (uniqueRequestedSeats.length === 0) {
-      return jsonError(400, "Nessun posto valido per generare i biglietti.", "BAD_SEATS")
+      return jsonError(400, "Nessun posto valido per generare le ricevute di prenotazione.", "BAD_SEATS")
     }
 
     // 4) Garantisce una riga prenotazione per ogni singolo posto (1 ticket = 1 riga)
@@ -250,7 +260,7 @@ export async function POST(request: Request) {
       return jsonError(500, "Nessuna prenotazione disponibile per i posti richiesti.", "BOOKING_MISSING")
     }
 
-    // Idempotenza per posto: se tutti i biglietti sono già stati inviati, non reinviare
+    // Idempotenza per posto: se tutte le ricevute sono già state inviate, non reinviare
     if (bookedSeats.every((item) => item.alreadySent)) {
       return NextResponse.json({
         ok: true,
@@ -278,12 +288,12 @@ export async function POST(request: Request) {
           data: dataLabel || String(repRow.data_evento ?? ""),
           orario: orarioLabel || "—",
           seats: [seatObj],
-          prezzoBiglietto,
-          dirittiPrevendita,
+          prezzoBiglietto: prezzoPrenotazione,
+          dirittiPrevendita: dirittiPrenotazione,
           ticketScanUrl,
         } as never)
         attachments.push({
-          filename: `biglietto-${seatObj.fila}${seatObj.posto}.pdf`,
+          filename: `ricevuta-prenotazione-${seatObj.fila}${seatObj.posto}.pdf`,
           content: pdfBuffer.toString("base64"),
         })
         sentBookingIds.push(item.bookingId)
@@ -303,6 +313,7 @@ export async function POST(request: Request) {
     }
 
     const resend = new Resend(resendKey)
+    const senderFrom = formatSenderFromAddress(from)
     const seatRowsHtml = uniqueRequestedSeats
       .map((seatCode) => {
         const parsed = parseSeatCode(seatCode)
@@ -312,19 +323,19 @@ export async function POST(request: Request) {
           <tr>
             <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(seatCode)}</td>
             <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(fila)}</td>
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">€ ${prezzoBiglietto.toFixed(2)}</td>
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">€ ${prezzoPrenotazione.toFixed(2)}</td>
           </tr>
         `
       })
       .join("")
-    const prevenditaTot = dirittiPrevendita * uniqueRequestedSeats.length
+    const dirittiPrenotazioneTot = dirittiPrenotazione * uniqueRequestedSeats.length
 
     const html = `
       <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#111827;background:#f9fafb;padding:24px;">
         <div style="max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">
-          <h2 style="margin:0 0 10px 0;font-size:24px;color:#0f172a;">Conferma ordine e biglietti</h2>
+          <h2 style="margin:0 0 10px 0;font-size:24px;color:#0f172a;">Conferma ordine e ricevuta di prenotazione</h2>
           <p style="margin:0 0 14px 0;">Gentile <strong>${escapeHtml(nome)} ${escapeHtml(cognome)}</strong>,</p>
-          <p style="margin:0 0 18px 0;">Grazie per il tuo acquisto. In allegato trovi i biglietti PDF con QR code individuali.</p>
+          <p style="margin:0 0 18px 0;">Grazie per la tua prenotazione. In allegato trovi la ricevuta di prenotazione PDF con QR code individuale.</p>
 
           <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#f8fafc;margin-bottom:14px;">
             <div style="font-size:18px;font-weight:700;margin-bottom:8px;">Spettacolo: <span style="color:#0b63f6;">${escapeHtml(spettacoloNome)}</span></div>
@@ -342,14 +353,14 @@ export async function POST(request: Request) {
                 <tr style="background:#f8fafc;text-align:left;">
                   <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Posto</th>
                   <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Fila</th>
-                  <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Prezzo singolo</th>
+                  <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Costo singolo</th>
                 </tr>
               </thead>
               <tbody>${seatRowsHtml}</tbody>
             </table>
-            <div style="margin-top:10px;"><strong>Diritti di prevendita:</strong> € ${dirittiPrevendita.toFixed(2)} x ${
+            <div style="margin-top:10px;"><strong>Diritti di prenotazione:</strong> € ${dirittiPrenotazione.toFixed(2)} x ${
               uniqueRequestedSeats.length
-            } = <strong>€ ${prevenditaTot.toFixed(2)}</strong></div>
+            } = <strong>€ ${dirittiPrenotazioneTot.toFixed(2)}</strong></div>
           </div>
 
           <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:14px;">
@@ -363,21 +374,23 @@ export async function POST(request: Request) {
           <div style="margin-bottom:14px;"><strong>Organizzatore:</strong> ${escapeHtml(enteOrganizzatore)}</div>
 
           <div style="font-size:10px;color:#475569;border-top:1px solid #e5e7eb;padding-top:12px;line-height:1.45;">
+            <p style="margin:0 0 8px 0;"><strong>DICHIARAZIONE FISCALE:</strong><br />
+            ${escapeHtml(FISCAL_DISCLAIMER)}</p>
             <p style="margin:0 0 8px 0;"><strong>NOTE LEGALI:</strong><br />
-            L'Organizzatore effettua la vendita dei Titoli di Ingresso in nome e per conto di se stesso. Il contratto relativo all’acquisto dei Titoli di Ingresso si intende pertanto concluso direttamente tra il Cliente e l’Organizzatore. La nostra Associazione agisce esclusivamente come intermediario tecnologico per la gestione della piattaforma di prenotazione.</p>
+            L'Organizzatore gestisce i Titoli di Accesso in nome e per conto di se stesso. Il contratto relativo alla prenotazione dei Titoli di Accesso si intende pertanto concluso direttamente tra il Cliente e l’Organizzatore. La nostra Associazione agisce esclusivamente come intermediario tecnologico per la gestione della piattaforma di prenotazione.</p>
             <p style="margin:0 0 8px 0;"><strong>TERMINI E CONDIZIONI:</strong><br />
-            Si informa il gentile pubblico che, ai sensi dell’art. 59, lett. n) del D.Lgs. 206/2005 (Codice del Consumo), il diritto di recesso non si applica ai contratti riguardanti la fornitura di servizi relativi al tempo libero, qualora il contratto preveda una data o un periodo di esecuzione specifici. Pertanto, una volta acquistato, il Titolo di Ingresso non è rimborsabile. L'Organizzatore si riserva il diritto di apportare modifiche al programma per cause di forza maggiore.</p>
+            Si informa il gentile pubblico che, ai sensi dell’art. 59, lett. n) del D.Lgs. 206/2005 (Codice del Consumo), il diritto di recesso non si applica ai contratti riguardanti la fornitura di servizi relativi al tempo libero, qualora il contratto preveda una data o un periodo di esecuzione specifici. Pertanto, una volta confermata la prenotazione, il Titolo di Accesso non è rimborsabile. L'Organizzatore si riserva il diritto di apportare modifiche al programma per cause di forza maggiore.</p>
             <p style="margin:0;"><strong>TRATTAMENTO DATI PERSONALI (Informativa Privacy):</strong><br />
-            I dati personali raccolti tramite questa piattaforma sono trattati dall'Organizzatore in qualità di Titolare del trattamento, nel pieno rispetto del Regolamento UE 2016/679 (GDPR). I dati sono raccolti esclusivamente per finalità legate alla gestione della prenotazione, all'invio del Titolo di Ingresso e agli obblighi contabili/fiscali previsti dalla legge. I dati non saranno ceduti a terzi. L'interessato può esercitare in ogni momento i propri diritti (accesso, rettifica, cancellazione) contattando l'Organizzatore all'indirizzo email indicato in fattura o sul sito.</p>
+            I dati personali raccolti tramite questa piattaforma sono trattati dall'Organizzatore in qualità di Titolare del trattamento, nel pieno rispetto del Regolamento UE 2016/679 (GDPR). I dati sono raccolti esclusivamente per finalità legate alla gestione della prenotazione, all'invio del Titolo di Accesso e agli obblighi contabili/fiscali previsti dalla legge. I dati non saranno ceduti a terzi. L'interessato può esercitare in ogni momento i propri diritti (accesso, rettifica, cancellazione) contattando l'Organizzatore all'indirizzo email indicato in fattura o sul sito.</p>
           </div>
         </div>
       </div>
     `
 
     const mail = await resend.emails.send({
-      from,
+      from: senderFrom,
       to: email,
-      subject: `Biglietti – ${spettacoloNome}`,
+      subject: `Ricevuta di Prenotazione – ${spettacoloNome}`,
       html,
       attachments,
     })

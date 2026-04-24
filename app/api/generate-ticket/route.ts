@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     const ticketScanUrl = String(body.ticket_scan_url ?? "").trim()
 
     if (!spettacolo || !data || !orario || !ticketScanUrl || seats.length === 0) {
-      return NextResponse.json({ error: "Payload non valido per generazione ticket." }, { status: 400 })
+      return NextResponse.json({ error: "Payload non valido per generazione ricevuta di prenotazione." }, { status: 400 })
     }
 
     const pdfBuffer = await renderTicketsPdf({
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": "attachment; filename=\"biglietti.pdf\"",
+        "Content-Disposition": "attachment; filename=\"ricevuta-prenotazione.pdf\"",
       },
     })
   } catch (err: unknown) {

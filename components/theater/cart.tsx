@@ -15,21 +15,21 @@ interface CartProps {
   selectedSeats: SelectedSeat[]
   onRemoveSeat: (seatId: string) => void
   onCheckout: () => void
-  /** Diritti di prevendita (€) per posto — da tabella spettacoli */
+  /** Diritti di prenotazione (€) per posto — da tabella spettacoli */
   dirittiPrevenditaPerSeat: number
 }
 
 export function Cart({ selectedSeats, onRemoveSeat, onCheckout, dirittiPrevenditaPerSeat }: CartProps) {
-  const subtotalBiglietti = selectedSeats.reduce((sum, seat) => sum + seat.price, 0)
-  const quotaPrevendita = selectedSeats.length * dirittiPrevenditaPerSeat
-  const total = subtotalBiglietti + quotaPrevendita
+  const subtotalPrenotazioni = selectedSeats.reduce((sum, seat) => sum + seat.price, 0)
+  const quotaServizio = selectedSeats.length * dirittiPrevenditaPerSeat
+  const total = subtotalPrenotazioni + quotaServizio
 
   return (
     <Card className="bg-card border-border sticky top-4">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-lg">
           <ShoppingCart className="w-5 h-5 text-primary" />
-          Riepilogo Ordine
+          Riepilogo Prenotazione
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -80,12 +80,12 @@ export function Cart({ selectedSeats, onRemoveSeat, onCheckout, dirittiPrevendit
                 <span>{selectedSeats.length}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span>Subtotale biglietti</span>
-                <span>€{subtotalBiglietti.toFixed(2)}</span>
+                <span>Subtotale prenotazione</span>
+                <span>€{subtotalPrenotazioni.toFixed(2)}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span>Diritti di prevendita ({selectedSeats.length} × €{dirittiPrevenditaPerSeat.toFixed(2)})</span>
-                <span>€{quotaPrevendita.toFixed(2)}</span>
+                <span>Diritti di prenotazione ({selectedSeats.length} × €{dirittiPrevenditaPerSeat.toFixed(2)})</span>
+                <span>€{quotaServizio.toFixed(2)}</span>
               </div>
             </div>
           </>
@@ -93,7 +93,7 @@ export function Cart({ selectedSeats, onRemoveSeat, onCheckout, dirittiPrevendit
       </CardContent>
       <CardFooter className="flex-col gap-3 pt-0">
         <div className="w-full flex justify-between items-center text-lg font-bold">
-          <span>Totale</span>
+          <span>Totale della prenotazione</span>
           <span className="text-primary">€{total.toFixed(2)}</span>
         </div>
         <Button className="w-full" size="lg" disabled={selectedSeats.length === 0} onClick={onCheckout}>

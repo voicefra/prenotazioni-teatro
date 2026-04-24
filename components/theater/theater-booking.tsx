@@ -76,8 +76,11 @@ interface PendingCheckoutData {
 const PENDING_SEATS_KEY = "pending_seats"
 const PENDING_CHECKOUT_DATA_KEY = "pending_checkout_data"
 
-const TICKET_EMAIL_FALLBACK_ALERT =
-  "Il pagamento è andato a buon fine, ma l'invio del biglietto ha riscontrato un problema. Controlla la tua email o contatta l'assistenza."
+const BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT =
+  "Il pagamento è andato a buon fine, ma l'invio della ricevuta di prenotazione ha riscontrato un problema. Controlla la tua email o contatta l'assistenza."
+
+const FISCAL_DISCLAIMER =
+  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
 
 async function readSendTicketFailureDetails(res: Response): Promise<string> {
   const ct = (res.headers.get("content-type") || "").toLowerCase()
@@ -561,7 +564,7 @@ export function TheaterBooking() {
         }
       }
 
-      // 3) Invio biglietti via email (server-side) + idempotenza
+      // 3) Invio ricevute di prenotazione via email (server-side) + idempotenza
       if (pendingCheckoutData) {
         try {
           const sendRes = await fetch("/api/send-ticket", {
@@ -581,29 +584,29 @@ export function TheaterBooking() {
           if (!sendRes.ok) {
             const details = await readSendTicketFailureDetails(sendRes)
             console.error("[send-ticket] risposta non OK", sendRes.status, details)
-            alert(TICKET_EMAIL_FALLBACK_ALERT)
+            alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
           } else {
             const ct = (sendRes.headers.get("content-type") || "").toLowerCase()
             if (!ct.includes("application/json")) {
               const preview = await sendRes.text().catch(() => "")
               console.error("[send-ticket] Content-Type inatteso (OK):", ct, preview.slice(0, 500))
-              alert(TICKET_EMAIL_FALLBACK_ALERT)
+              alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
             } else {
               try {
                 const data = (await sendRes.json()) as { ok?: boolean; alreadySent?: boolean }
                 if (!data?.ok && !data?.alreadySent) {
                   console.error("[send-ticket] JSON OK ma payload inatteso:", data)
-                  alert(TICKET_EMAIL_FALLBACK_ALERT)
+                  alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
                 }
               } catch (e) {
                 console.error("[send-ticket] parse JSON fallito dopo OK HTTP:", e)
-                alert(TICKET_EMAIL_FALLBACK_ALERT)
+                alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
               }
             }
           }
         } catch (e) {
           console.error("[send-ticket] fetch o elaborazione fallita:", e)
-          alert(TICKET_EMAIL_FALLBACK_ALERT)
+          alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
         }
       }
 
@@ -901,18 +904,18 @@ export function TheaterBooking() {
               </div>
 
               <div className="mt-8 border-t border-border pt-6">
-                <h3 className="mb-3 text-center text-sm font-semibold text-muted-foreground">Prezzi (da database)</h3>
+                <h3 className="mb-3 text-center text-sm font-semibold text-muted-foreground">Riepilogo costi</h3>
                 <div className="mx-auto max-w-sm space-y-2 text-sm">
                   <div className="flex justify-between gap-4">
-                    <span className="text-muted-foreground">Biglietto (per posto)</span>
+                    <span className="text-muted-foreground">Prenotazione (per posto)</span>
                     <span className="font-semibold text-primary">€{prezzoBigliettoEur.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <span className="text-muted-foreground">Diritti di prevendita (per posto)</span>
+                    <span className="text-muted-foreground">Diritti di prenotazione (per posto)</span>
                     <span className="font-semibold text-primary">€{dirittiPrevenditaEur.toFixed(2)}</span>
                   </div>
                   <p className="pt-1 text-center text-xs text-muted-foreground">
-                    Il totale nel carrello include biglietti e diritti per i posti selezionati.
+                    Il totale della prenotazione include titolo di accesso e costo servizio per i posti selezionati.
                   </p>
                 </div>
               </div>
@@ -942,6 +945,11 @@ export function TheaterBooking() {
           </div>
         </div>
       </main>
+      <footer className="border-t border-border/60 bg-card/20 px-4 py-4">
+        <div className="container mx-auto">
+          <small className="block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
+        </div>
+      </footer>
 
       {isDataModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

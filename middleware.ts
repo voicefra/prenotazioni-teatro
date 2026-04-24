@@ -1,22 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export function middleware(req: NextRequest) {
-  // Proteggiamo solo la rotta /admin
   if (req.nextUrl.pathname.startsWith('/admin')) {
     const basicAuth = req.headers.get('authorization');
-    const url = req.nextUrl;
+    const expectedPassword = process.env.ADMIN_PASSWORD?.trim();
 
-    if (basicAuth) {
-      const authValue = basicAuth.split(' ')[1];
-      const [user, pwd] = atob(authValue).split(':');
+    if (basicAuth?.startsWith('Basic ')) {
+      const authValue = basicAuth.split(' ')[1] ?? '';
 
-      // Qui controlliamo la password (user può essere un nome a piacere, es 'admin')
-      if (user === 'admin' && pwd === process.env.ADMIN_PASSWORD) {
-        return NextResponse.next();
+      try {
+        const decoded = atob(authValue);
+        const separatorIndex = decoded.indexOf(':');
+
+        if (separatorIndex !== -1) {
+          const user = decoded.slice(0, separatorIndex);
+          const pwd = decoded.slice(separatorIndex + 1).trim();
+
+          // Log temporaneo per debug locale.
+          console.log('Password ricevuta:', pwd);
+
+          if (expectedPassword && user === 'admin' && pwd === expectedPassword) {
+            return NextResponse.next();
+          }
+        }
+      } catch (error) {
+        console.log('Errore nel parsing Basic Auth:', error);
       }
     }
 
-    // Se la password è sbagliata o manca, richiediamo l'autenticazione
     return new NextResponse('Auth Required', {
       status: 401,
       headers: { 'WWW-Authenticate': 'Basic realm="Secure Area"' },

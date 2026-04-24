@@ -34,7 +34,7 @@ export default async function ScanPage({ searchParams }: ScanPageProps) {
   if (!result.ok) {
     return (
       <div className="mx-auto flex min-h-[60vh] max-w-lg flex-col justify-center gap-4 px-4 py-12">
-        <h1 className="text-xl font-semibold text-destructive">Biglietto non valido</h1>
+        <h1 className="text-xl font-semibold text-destructive">Prenotazione non valida</h1>
         <p className="text-sm text-muted-foreground">{result.message}</p>
         <Link href="/spettacoli" className="text-sm text-primary underline">
           Torna agli spettacoli

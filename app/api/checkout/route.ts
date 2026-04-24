@@ -113,8 +113,8 @@ export async function POST(request: Request) {
         price_data: {
           currency: "eur",
           product_data: {
-            name: `🎟️ Ingresso Teatro`,
-            description: `Fila ${fila.toUpperCase()} - Posto ${numero}`,
+            name: "🎟️ Prenotazione Posto",
+            description: `Prenotazione per spettacolo - Fila ${fila.toUpperCase()} - Posto ${numero}`,
           },
           unit_amount: unitAmountTicketCents,
         },
@@ -126,8 +126,8 @@ export async function POST(request: Request) {
       price_data: {
         currency: "eur",
         product_data: {
-          name: "⚙️ Diritti di Prevendita",
-          description: "Costi di gestione per biglietto",
+          name: "Diritti di prenotazione",
+          description: "Costi di gestione per prenotazione",
         },
         unit_amount: unitAmountFeeCents,
       },

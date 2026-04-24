@@ -17,7 +17,7 @@ function getServiceClient():
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-/** Righe in `public.scansioni` per questo biglietto (ticket_id = prenotazioni.id) */
+/** Righe in `public.scansioni` per questa prenotazione (ticket_id = prenotazioni.id) */
 export type ScansioneRow = {
   id: string
   orario_scansione: string
@@ -36,13 +36,13 @@ export type ScanProcessResult =
   | { ok: false; reason: "invalid_id" | "not_found" | "not_paid" | "server" | "config"; message: string }
 
 /**
- * Valida il biglietto su `public.prenotazioni` (id UUID = ticket_id) e registra una riga in `public.scansioni`.
+ * Valida la prenotazione su `public.prenotazioni` (id UUID = ticket_id) e registra una riga in `public.scansioni`.
  * Solo lato server (service role).
  */
 export async function processTicketScan(ticketIdRaw: string): Promise<ScanProcessResult> {
   const ticketId = String(ticketIdRaw ?? "").trim()
   if (!ticketId || !UUID_RE.test(ticketId)) {
-    return { ok: false, reason: "invalid_id", message: "Codice biglietto non valido." }
+    return { ok: false, reason: "invalid_id", message: "Codice prenotazione non valido." }
   }
 
   const client = getServiceClient()
@@ -63,12 +63,12 @@ export async function processTicketScan(ticketIdRaw: string): Promise<ScanProces
     return { ok: false, reason: "server", message: prenErr.message }
   }
   if (!pren || String(pren.id) !== ticketId) {
-    return { ok: false, reason: "not_found", message: "Biglietto non trovato." }
+    return { ok: false, reason: "not_found", message: "Prenotazione non trovata." }
   }
 
   const stato = String(pren.stato_pagamento ?? "").toLowerCase()
   if (stato !== "paid") {
-    return { ok: false, reason: "not_paid", message: "Questo biglietto non risulta pagato." }
+    return { ok: false, reason: "not_paid", message: "Questa prenotazione non risulta pagata." }
   }
 
   const orarioScansione = new Date().toISOString()

@@ -165,7 +165,7 @@ export function SpettacoliSection() {
     const p = parseEuroInput(prezzo)
     const d = parseEuroInput(diritti)
     if (p == null || p < 0) {
-      setError("Prezzo biglietto non valido.")
+      setError("Prezzo prenotazione non valido.")
       setSaving(false)
       return
     }
@@ -328,7 +328,7 @@ export function SpettacoliSection() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label htmlFor="s-prezzo" className="mb-1 block text-sm font-medium">
-                    Prezzo biglietto (€)
+                    Prezzo prenotazione (€)
                   </label>
                   <input
                     id="s-prezzo"
