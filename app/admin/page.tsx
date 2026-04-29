@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PrenotazioniSection } from "./_components/prenotazioni-section"
 import { ReplicheSection } from "./_components/repliche-section"
+import { ResetDatabaseSection } from "./_components/reset-database-section"
 import { SpettacoliSection } from "./_components/spettacoli-section"
 import { TeatriSection } from "./_components/teatri-section"
 
@@ -43,6 +44,9 @@ export default function AdminPage() {
             <TabsTrigger value="prenotazioni" className="flex-1 min-w-[100px]">
               Prenotazioni
             </TabsTrigger>
+            <TabsTrigger value="reset-db" className="flex-1 min-w-[120px]">
+              Reset Database
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="teatri" className="mt-0 outline-none">
@@ -59,6 +63,10 @@ export default function AdminPage() {
 
           <TabsContent value="prenotazioni" className="mt-0 outline-none">
             <PrenotazioniSection />
+          </TabsContent>
+
+          <TabsContent value="reset-db" className="mt-0 outline-none">
+            <ResetDatabaseSection />
           </TabsContent>
         </Tabs>
       </div>
