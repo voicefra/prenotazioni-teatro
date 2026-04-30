@@ -34,7 +34,7 @@ interface ReplicaOpt {
 export function ResetDatabaseSection() {
   const [resetMode, setResetMode] = useState<ResetMode>("global")
   const [selected, setSelected] = useState<Record<string, boolean>>({})
-  const [confirmText, setConfirmText] = useState("")
+  const [confirmationText, setConfirmationText] = useState("")
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null)
 
@@ -91,16 +91,10 @@ export function ResetDatabaseSection() {
     setReplicaId("")
   }, [spettacoloId, loadRepliche])
 
-  const hasTableSelection = TABLES.some((t) => {
+  const selectedTables = TABLES.filter((t) => {
     if (resetMode === "selective" && t.id === "teatri") return false
     return selected[t.id]
   })
-
-  const canSubmit =
-    confirmText.trim() === "CONFERMA" &&
-    hasTableSelection &&
-    !running &&
-    (resetMode === "global" || (spettacoloId.trim() !== "" && replicaId.trim() !== ""))
 
   const toggle = (id: string) => {
     if (resetMode === "selective" && id === "teatri") return
@@ -156,12 +150,11 @@ export function ResetDatabaseSection() {
   }
 
   const handleReset = async () => {
-    if (!canSubmit) return
+    if (running) return
+    if (confirmationText !== "CONFERMA" || selectedTables.length === 0) return
+    if (resetMode === "selective" && (spettacoloId.trim() === "" || replicaId.trim() === "")) return
 
-    const tables = TABLES.filter((t) => {
-      if (resetMode === "selective" && t.id === "teatri") return false
-      return selected[t.id]
-    }).map((t) => t.id)
+    const tables = selectedTables.map((t) => t.id)
 
     const ok = window.confirm(buildConfirmMessage(tables))
     if (!ok) return
@@ -174,7 +167,7 @@ export function ResetDatabaseSection() {
         ? { spettacolo_id: spettacoloId.trim(), replica_id: replicaId.trim() }
         : null
 
-    const result = await adminReset(tables, confirmText.trim(), filter)
+    const result = await adminReset(tables, confirmationText, filter)
 
     if (!result.ok) {
       setMessage({ type: "err", text: result.error })
@@ -184,7 +177,7 @@ export function ResetDatabaseSection() {
 
     setMessage({ type: "ok", text: formatResult(result) })
     setSelected({})
-    setConfirmText("")
+    setConfirmationText("")
     if (resetMode === "selective") {
       setSpettacoloId("")
       setReplicaId("")
@@ -331,9 +324,11 @@ export function ResetDatabaseSection() {
           <input
             id="reset-confirm"
             type="text"
-            value={confirmText}
+            value={confirmationText}
             onChange={(e) => {
-              setConfirmText(e.target.value)
+              const nextText = e.target.value
+              setConfirmationText(nextText)
+              console.log("Testo inserito:", nextText)
               setMessage(null)
             }}
             autoComplete="off"
@@ -343,7 +338,12 @@ export function ResetDatabaseSection() {
         </div>
 
         <div>
-          <Button type="button" variant="destructive" disabled={!canSubmit} onClick={() => void handleReset()}>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={confirmationText !== "CONFERMA" || selectedTables.length === 0}
+            onClick={() => void handleReset()}
+          >
             {running ? "Esecuzione…" : resetMode === "global" ? "Esegui reset globale" : "Esegui reset selettivo"}
           </Button>
           <p className="mt-2 text-xs text-muted-foreground">
