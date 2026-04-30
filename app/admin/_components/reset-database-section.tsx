@@ -95,6 +95,7 @@ export function ResetDatabaseSection() {
     if (resetMode === "selective" && t.id === "teatri") return false
     return selected[t.id]
   })
+  const isResetEnabled = confirmationText === "CONFERMA" && selectedTables.length > 0
 
   const toggle = (id: string) => {
     if (resetMode === "selective" && id === "teatri") return
@@ -340,8 +341,13 @@ export function ResetDatabaseSection() {
         <div>
           <Button
             type="button"
-            variant="destructive"
-            disabled={confirmationText !== "CONFERMA" || selectedTables.length === 0}
+            variant="default"
+            disabled={!isResetEnabled}
+            className={
+              isResetEnabled
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "bg-muted text-muted-foreground hover:bg-muted"
+            }
             onClick={() => void handleReset()}
           >
             {running ? "Esecuzione…" : resetMode === "global" ? "Esegui reset globale" : "Esegui reset selettivo"}
