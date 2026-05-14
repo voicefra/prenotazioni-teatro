@@ -24,7 +24,13 @@ function getSupabaseService() {
 }
 
 function parseSeatCode(code: string): TicketSeat | null {
-  const m = code.trim().match(/^([A-Za-z]+)[-\s]?(\d+)$/)
+  const trimmed = code.trim()
+  const upper = trimmed.toUpperCase()
+  if (upper.startsWith("UNICO")) {
+    const suffix = trimmed.replace(/^unico[-_]?/i, "").trim() || trimmed
+    return { fila: "Posto unico", posto: suffix.slice(0, 24) }
+  }
+  const m = trimmed.match(/^([A-Za-z]+)[-\s]?(\d+)$/)
   if (!m) return null
   return { fila: m[1].toUpperCase(), posto: m[2] }
 }
@@ -277,6 +283,7 @@ export async function POST(request: Request) {
       if (!seatObj) continue
 
       const ticketScanUrl = buildTicketScanUrl(item.bookingId)
+      const safeFileSlug = `${seatObj.fila}-${seatObj.posto}`.replace(/[^a-zA-Z0-9-_]+/g, "-").slice(0, 80)
       try {
         const pdfBuffer = await renderTicketsPdf({
           spettacolo: spettacoloNome,
@@ -293,7 +300,7 @@ export async function POST(request: Request) {
           ticketScanUrl,
         } as never)
         attachments.push({
-          filename: `ricevuta-prenotazione-${seatObj.fila}${seatObj.posto}.pdf`,
+          filename: `ricevuta-prenotazione-${safeFileSlug}.pdf`,
           content: pdfBuffer.toString("base64"),
         })
         sentBookingIds.push(item.bookingId)

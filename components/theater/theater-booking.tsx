@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Stage } from "./stage"
 import { SeatRow } from "./seat-row"
-import { Cart } from "./cart"
+import { Cart, type CartBookingMode } from "./cart"
 import { Legend } from "./legend"
 import type { SeatStatus } from "./seat"
 import { formatTimeHHmm } from "@/lib/datetime-format"
@@ -45,6 +45,7 @@ interface SpettacoloHeaderRow {
   locandina_url?: string | null
   prezzo_biglietto?: number | null
   diritti_prevendita?: number | null
+  modalita_prenotazione?: string | null
 }
 
 interface TeatroInfoRow {
@@ -52,6 +53,8 @@ interface TeatroInfoRow {
   indirizzo?: string | null
   comune?: string | null
   telefono?: string | null
+  numero_file?: number | null
+  posti_per_fila?: number | null
 }
 
 interface PrenotazioneStatusRow {
@@ -225,6 +228,21 @@ function normalizeBookedSeats(value: string[] | string | null | undefined): stri
   return seat ? [seat] : []
 }
 
+function countBookedTicketsFromPrenotazioni(rows: PrenotazioneStatusRow[]): number {
+  return rows.reduce((sum, row) => sum + normalizeBookedSeats(row.posti_prenotati).length, 0)
+}
+
+function generateUnicoSeatCodes(count: number): string[] {
+  const out: string[] = []
+  for (let i = 0; i < count; i++) {
+    const bytes = new Uint8Array(10)
+    crypto.getRandomValues(bytes)
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("").toUpperCase()
+    out.push(`UNICO-${hex}`)
+  }
+  return out
+}
+
 export function TheaterBooking() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -246,6 +264,10 @@ export function TheaterBooking() {
   const [bookingOrarioLabel, setBookingOrarioLabel] = useState<string>("")
   const [prezzoBigliettoEur, setPrezzoBigliettoEur] = useState(15)
   const [dirittiPrevenditaEur, setDirittiPrevenditaEur] = useState(2)
+  const [bookingMode, setBookingMode] = useState<CartBookingMode>("posti_assegnati")
+  const [postoUnicoQuantity, setPostoUnicoQuantity] = useState(1)
+  const [postoUnicoPostiRimanenti, setPostoUnicoPostiRimanenti] = useState(0)
+  const [teatroCapienzaTotale, setTeatroCapienzaTotale] = useState(0)
   const [isDataModalOpen, setIsDataModalOpen] = useState(false)
   const [isSubmittingBooking, setIsSubmittingBooking] = useState(false)
   const [formData, setFormData] = useState<BookingFormData>(initialFormData)
@@ -310,7 +332,7 @@ export function TheaterBooking() {
 
     const { data: spettacoloRow, error: spettacoloErr } = await supabase
       .from("spettacoli")
-      .select("teatro_id, nome_spettacolo, ente_organizzatore, locandina_url, prezzo_biglietto, diritti_prevendita")
+      .select("teatro_id, nome_spettacolo, ente_organizzatore, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione")
       .eq("id", spettacoloId)
       .maybeSingle()
 
@@ -323,10 +345,11 @@ export function TheaterBooking() {
     setSelectedEnteOrganizzatore(String(show?.ente_organizzatore ?? "").trim())
 
     const teatroId = String(show?.teatro_id ?? "").trim()
+    let capienzaSala = 0
     if (teatroId) {
       const { data: teatroRow, error: teatroErr } = await supabase
         .from("teatri")
-        .select("nome_teatro, indirizzo, comune, telefono")
+        .select("nome_teatro, indirizzo, comune, telefono, numero_file, posti_per_fila")
         .eq("id", teatroId)
         .maybeSingle()
       if (teatroErr) {
@@ -337,11 +360,17 @@ export function TheaterBooking() {
       setTeatroIndirizzo(String(teatro?.indirizzo ?? "").trim() || "Dati non disponibili")
       setTeatroComune(String(teatro?.comune ?? "").trim() || "Dati non disponibili")
       setTeatroTelefono(String(teatro?.telefono ?? "").trim() || "Dati non disponibili")
+      const nf = Math.floor(Number(teatro?.numero_file ?? 0))
+      const pp = Math.floor(Number(teatro?.posti_per_fila ?? 0))
+      capienzaSala = Number.isFinite(nf) && Number.isFinite(pp) && nf > 0 && pp > 0 ? nf * pp : 0
+      setTeatroCapienzaTotale(capienzaSala)
     } else {
       setTeatroNome("Dati non disponibili")
       setTeatroIndirizzo("Dati non disponibili")
       setTeatroComune("Dati non disponibili")
       setTeatroTelefono("Dati non disponibili")
+      setTeatroCapienzaTotale(0)
+      capienzaSala = 0
     }
 
     const prezzoPosto = (() => {
@@ -359,9 +388,43 @@ export function TheaterBooking() {
     setPrezzoBigliettoEur(prezzoPosto)
     setDirittiPrevenditaEur(dirittiPosto)
 
+    const modalitaRaw = String(show?.modalita_prenotazione ?? "posti_assegnati").trim()
+    const isPostoUnico = modalitaRaw === "posto_unico"
+    setBookingMode(isPostoUnico ? "posto_unico" : "posti_assegnati")
+
+    const { data: statusRows, error: statusError } = await supabase
+      .from("prenotazioni")
+      .select("posti_prenotati, stato_pagamento")
+      .eq("replica_id", replicaId)
+      .in("stato_pagamento", ["pending", "paid"])
+
+    if (statusError) {
+      logSupabaseError("[prenotazioni disponibilità]", statusError)
+      setSeats([])
+      setIsLoadingSeats(false)
+      return
+    }
+
+    const statusTyped = (statusRows ?? []) as PrenotazioneStatusRow[]
+    const bookedTickets = countBookedTicketsFromPrenotazioni(statusTyped)
+
+    if (isPostoUnico) {
+      const rimanenti = Math.max(0, capienzaSala - bookedTickets)
+      setPostoUnicoPostiRimanenti(rimanenti)
+      setPostoUnicoQuantity((prev) => {
+        if (rimanenti <= 0) return 0
+        const p = Math.floor(Number(prev))
+        const base = Number.isFinite(p) && p >= 1 ? p : 1
+        return Math.min(base, rimanenti)
+      })
+      setSeats([])
+      setIsLoadingSeats(false)
+      return
+    }
+
     /**
-     * 2) Posti: priorità a replica_id (mappa per quella replica).
-     *    Se la colonna non esiste o non ci sono righe, fallback su spettacolo_id (mappa unica per spettacolo).
+     * Posti assegnati: priorità a replica_id (mappa per quella replica).
+     * Se la colonna non esiste o non ci sono righe, fallback su spettacolo_id (mappa unica per spettacolo).
      */
     let postiRows: PostoRow[] = []
     const byReplica = await supabase.from("posti").select("id, numero_posto").eq("replica_id", replicaId)
@@ -395,20 +458,8 @@ export function TheaterBooking() {
       )
     }
 
-    const { data: statusRows, error: statusError } = await supabase
-      .from("prenotazioni")
-      .select("posti_prenotati, stato_pagamento")
-      .eq("replica_id", replicaId)
-      .in("stato_pagamento", ["pending", "paid"])
-
-    if (statusError) {
-      logSupabaseError("[prenotazioni disponibilità]", statusError)
-      setIsLoadingSeats(false)
-      return
-    }
-
     const notFreeSeatCodes = new Set<string>()
-    ;((statusRows ?? []) as PrenotazioneStatusRow[]).forEach((row) => {
+    statusTyped.forEach((row) => {
       normalizeBookedSeats(row.posti_prenotati).forEach((seatCode) => {
         notFreeSeatCodes.add(String(seatCode).toUpperCase())
       })
@@ -645,6 +696,29 @@ export function TheaterBooking() {
 
   // Click su "Procedi al Pagamento" -> apre modulo dati
   const handleCheckout = useCallback(() => {
+    if (bookingMode === "posto_unico") {
+      if (teatroCapienzaTotale <= 0) {
+        alert("Capienza teatro non disponibile. Contatta l'organizzazione.")
+        return
+      }
+      if (postoUnicoPostiRimanenti <= 0) {
+        alert("Spettacolo sold out: non ci sono posti disponibili per questa replica.")
+        return
+      }
+      const q = Math.floor(postoUnicoQuantity)
+      if (!Number.isFinite(q) || q < 1) {
+        alert("Indica quanti posti vuoi prenotare.")
+        return
+      }
+      if (q > postoUnicoPostiRimanenti) {
+        alert("Non ci sono abbastanza posti disponibili. Aggiorniamo la disponibilità.")
+        void loadSeats()
+        return
+      }
+      setIsDataModalOpen(true)
+      return
+    }
+
     const selectedCount = seats.filter((seat) => seat.status === "selected").length
     if (selectedCount === 0) {
       alert("Seleziona almeno un posto")
@@ -652,7 +726,14 @@ export function TheaterBooking() {
     }
 
     setIsDataModalOpen(true)
-  }, [seats])
+  }, [
+    bookingMode,
+    teatroCapienzaTotale,
+    postoUnicoPostiRimanenti,
+    postoUnicoQuantity,
+    seats,
+    loadSeats,
+  ])
 
   const handleFormInputChange = useCallback((field: keyof BookingFormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
@@ -679,21 +760,59 @@ export function TheaterBooking() {
       return
     }
 
-    const selectedSnapshot = seats.filter((seat) => seat.status === "selected")
-    const selectedSeatCodes = selectedSnapshot.map(toSeatCode)
-    const n = selectedSnapshot.length
-    const totalAmount =
-      selectedSnapshot.reduce((sum, s) => sum + s.price, 0) + n * dirittiPrevenditaEur
+    let selectedSeatCodes: string[] = []
+    let totalAmount = 0
 
-    if (selectedSeatCodes.length === 0) {
-      alert("Seleziona almeno un posto")
-      setIsDataModalOpen(false)
-      return
-    }
+    if (bookingMode === "posto_unico") {
+      const n = Math.floor(postoUnicoQuantity)
+      if (teatroCapienzaTotale <= 0) {
+        alert("Capienza teatro non disponibile. Contatta l'organizzazione.")
+        return
+      }
+      if (n < 1) {
+        alert("Indica quanti posti vuoi prenotare.")
+        return
+      }
 
-    setIsSubmittingBooking(true)
+      const { data: statusRows, error: statusError } = await supabase
+        .from("prenotazioni")
+        .select("posti_prenotati, stato_pagamento")
+        .eq("replica_id", selectedReplicaId)
+        .in("stato_pagamento", ["pending", "paid"])
 
-    try {
+      if (statusError) {
+        logSupabaseError("[prenotazioni verifica checkout posto unico]", statusError)
+        alert("Errore durante la verifica dei posti. Riprova.")
+        return
+      }
+
+      const booked = countBookedTicketsFromPrenotazioni((statusRows ?? []) as PrenotazioneStatusRow[])
+      const rimanenti = Math.max(0, teatroCapienzaTotale - booked)
+      if (n > rimanenti) {
+        alert(
+          rimanenti <= 0
+            ? "Spettacolo sold out: non ci sono più posti disponibili per questa replica."
+            : "Non ci sono abbastanza posti disponibili per la quantità richiesta.",
+        )
+        await loadSeats()
+        return
+      }
+
+      selectedSeatCodes = generateUnicoSeatCodes(n)
+      totalAmount = n * prezzoBigliettoEur + n * dirittiPrevenditaEur
+    } else {
+      const selectedSnapshot = seats.filter((seat) => seat.status === "selected")
+      selectedSeatCodes = selectedSnapshot.map(toSeatCode)
+      const n = selectedSnapshot.length
+      totalAmount =
+        selectedSnapshot.reduce((sum, s) => sum + s.price, 0) + n * dirittiPrevenditaEur
+
+      if (selectedSeatCodes.length === 0) {
+        alert("Seleziona almeno un posto")
+        setIsDataModalOpen(false)
+        return
+      }
+
       // 1) Verifica disponibilita aggiornata per la replica scelta
       const { data: statusRows, error: statusError } = await supabase
         .from("prenotazioni")
@@ -720,7 +839,11 @@ export function TheaterBooking() {
         await loadSeats()
         return
       }
+    }
 
+    setIsSubmittingBooking(true)
+
+    try {
       // 2) Salva stato temporaneo nel browser (NO insert prenotazioni qui)
       const pendingData: PendingCheckoutData = {
         seatsCodes: selectedSeatCodes,
@@ -780,9 +903,26 @@ export function TheaterBooking() {
     } finally {
       setIsSubmittingBooking(false)
     }
-  }, [formData, seats, loadSeats, selectedReplicaId, selectedSpettacoloId, dirittiPrevenditaEur])
+  }, [
+    formData,
+    seats,
+    loadSeats,
+    selectedReplicaId,
+    selectedSpettacoloId,
+    dirittiPrevenditaEur,
+    bookingMode,
+    postoUnicoQuantity,
+    teatroCapienzaTotale,
+    prezzoBigliettoEur,
+  ])
 
   const handleClearCart = useCallback(async () => {
+    if (bookingMode === "posto_unico") {
+      if (postoUnicoPostiRimanenti > 0) setPostoUnicoQuantity(1)
+      await loadSeats()
+      return
+    }
+
     const hasSelectedSeats = seats.some((seat) => seat.status === "selected")
     if (!hasSelectedSeats) return
 
@@ -791,7 +931,7 @@ export function TheaterBooking() {
     )
 
     await loadSeats()
-  }, [seats, loadSeats])
+  }, [bookingMode, postoUnicoPostiRimanenti, seats, loadSeats])
 
   const selectedSeats = seats
     .filter((seat) => seat.status === "selected")
@@ -810,6 +950,9 @@ export function TheaterBooking() {
 
   const rows = Object.keys(seatsByRow).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
 
+  const postoUnicoSoldOutUi =
+    !isLoadingSeats && bookingMode === "posto_unico" && (postoUnicoPostiRimanenti <= 0 || teatroCapienzaTotale <= 0)
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-10 border-b border-border bg-card/50 backdrop-blur-sm">
@@ -827,13 +970,18 @@ export function TheaterBooking() {
               <h1 className="text-xl font-bold text-foreground md:text-2xl truncate">{selectedSpettacoloTitle}</h1>
               <div className="text-sm text-muted-foreground">
                 {isLoadingSeats ? (
-                  "Caricamento replica e mappa posti..."
+                  "Caricamento replica..."
                 ) : bookingDateLabel && bookingDateLabel !== "—" ? (
                   <>
                     {selectedEnteOrganizzatore && <span className="block">Organizzato da: {selectedEnteOrganizzatore}</span>}
                     <span className="block">Data: {bookingDateLabel}</span>
                     <span className="block">Orario: {bookingOrarioLabel}</span>
+                    {!isLoadingSeats && bookingMode === "posto_unico" && (
+                      <span className="block text-foreground/90">Modalità: posto unico (senza mappa)</span>
+                    )}
                   </>
+                ) : bookingMode === "posto_unico" ? (
+                  "Indica quanti posti desideri"
                 ) : (
                   "Seleziona i tuoi posti"
                 )}
@@ -850,7 +998,7 @@ export function TheaterBooking() {
       <main className="container mx-auto px-4 py-8">
         {isLoadingSeats && (
           <div className="mb-6 rounded-xl border border-border bg-card/50 p-4 text-sm text-muted-foreground">
-            Caricamento mappa posti della replica selezionata...
+            Caricamento replica e disponibilità...
           </div>
         )}
 
@@ -872,8 +1020,12 @@ export function TheaterBooking() {
                 <span className="font-semibold">Telefono:</span> {teatroTelefono}
               </p>
             </div>
-            <Stage />
-            <Legend />
+            {bookingMode !== "posto_unico" && (
+              <>
+                <Stage />
+                <Legend />
+              </>
+            )}
 
             <div className="rounded-2xl border border-border bg-card/30 p-4 md:p-8">
               <div className="mb-4 space-y-1 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm text-foreground md:text-base">
@@ -892,16 +1044,42 @@ export function TheaterBooking() {
                   Orario: <span className="font-semibold">{bookingOrarioLabel}</span>
                 </p>
               </div>
-              <div className="space-y-3 md:space-y-4">
-                {rows.map((row) => (
-                  <SeatRow
-                    key={row}
-                    rowLetter={row}
-                    seats={seatsByRow[row] || []}
-                    onSeatClick={handleSeatClick}
-                  />
-                ))}
-              </div>
+              {bookingMode === "posto_unico" && !isLoadingSeats && (
+                <div className="mb-6 space-y-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-3 text-sm text-foreground">
+                  <p className="font-semibold text-foreground">Prenotazione a posto unico</p>
+                  <p className="text-muted-foreground">
+                    Non è prevista la scelta del numero di posto in sala. Indica nel riepilogo a destra quanti posti
+                    desideri, poi usa &quot;Procedi al pagamento&quot;.
+                  </p>
+                  <p>
+                    <span className="font-medium">Capienza teatro:</span>{" "}
+                    {teatroCapienzaTotale > 0 ? `${teatroCapienzaTotale} posti` : "non configurata"}
+                  </p>
+                  <p>
+                    <span className="font-medium">Posti ancora disponibili per questa replica:</span>{" "}
+                    {teatroCapienzaTotale > 0 ? postoUnicoPostiRimanenti : "—"}
+                  </p>
+                  {postoUnicoSoldOutUi && (
+                    <p className="font-medium text-destructive pt-1">
+                      {teatroCapienzaTotale <= 0
+                        ? "Impossibile prenotare: capienza teatro non configurata. Contatta l'organizzazione."
+                        : "Sold out: non è più possibile prenotare per questa replica."}
+                    </p>
+                  )}
+                </div>
+              )}
+              {bookingMode !== "posto_unico" && (
+                <div className="space-y-3 md:space-y-4">
+                  {rows.map((row) => (
+                    <SeatRow
+                      key={row}
+                      rowLetter={row}
+                      seats={seatsByRow[row] || []}
+                      onSeatClick={handleSeatClick}
+                    />
+                  ))}
+                </div>
+              )}
 
               <div className="mt-8 border-t border-border pt-6">
                 <h3 className="mb-3 text-center text-sm font-semibold text-muted-foreground">Riepilogo costi</h3>
@@ -915,7 +1093,8 @@ export function TheaterBooking() {
                     <span className="font-semibold text-primary">€{dirittiPrevenditaEur.toFixed(2)}</span>
                   </div>
                   <p className="pt-1 text-center text-xs text-muted-foreground">
-                    Il totale della prenotazione include titolo di accesso e costo servizio per i posti selezionati.
+                    Il totale della prenotazione include titolo di accesso e costo servizio per i posti
+                    {bookingMode === "posto_unico" ? " richiesti" : " selezionati"}.
                   </p>
                 </div>
               </div>
@@ -925,6 +1104,12 @@ export function TheaterBooking() {
           <div className="w-full lg:w-80 xl:w-96">
             <div className="sticky top-4">
               <Cart
+                bookingMode={bookingMode}
+                postoUnicoQuantity={postoUnicoQuantity}
+                onPostoUnicoQuantityChange={setPostoUnicoQuantity}
+                postoUnicoMax={postoUnicoPostiRimanenti}
+                postoUnicoSoldOut={postoUnicoSoldOutUi}
+                prezzoPerPosto={prezzoBigliettoEur}
                 selectedSeats={selectedSeats}
                 onRemoveSeat={handleRemoveSeat}
                 onCheckout={handleCheckout}
@@ -935,10 +1120,10 @@ export function TheaterBooking() {
                 <button
                   type="button"
                   onClick={handleClearCart}
-                  disabled={selectedSeats.length === 0}
+                  disabled={bookingMode === "posto_unico" ? postoUnicoPostiRimanenti <= 0 : selectedSeats.length === 0}
                   className="w-full rounded-lg border border-destructive px-4 py-2 font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Annulla (Svuota Carrello)
+                  {bookingMode === "posto_unico" ? "Ripristina quantità (1 posto)" : "Annulla (Svuota Carrello)"}
                 </button>
               </div>
             </div>

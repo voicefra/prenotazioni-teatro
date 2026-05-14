@@ -15,8 +15,10 @@ import {
 import type { TeatroRow } from "./teatri-section"
 
 const SPETTACOLI_SELECT =
-  "id, nome_spettacolo, ente_organizzatore, teatro_id, locandina_url, prezzo_biglietto, diritti_prevendita" as const
+  "id, nome_spettacolo, ente_organizzatore, teatro_id, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione" as const
 const TEATRI_SELECT = "id, nome_teatro, numero_file, posti_per_fila" as const
+
+type ModalitaPrenotazione = "posti_assegnati" | "posto_unico"
 
 interface SpettacoloRow {
   id: string
@@ -26,6 +28,7 @@ interface SpettacoloRow {
   locandina_url: string | null
   prezzo_biglietto: number | null
   diritti_prevendita: number | null
+  modalita_prenotazione: ModalitaPrenotazione | null
 }
 
 export function SpettacoliSection() {
@@ -41,6 +44,7 @@ export function SpettacoliSection() {
   const [enteOrganizzatore, setEnteOrganizzatore] = useState("")
   const [prezzo, setPrezzo] = useState("15")
   const [diritti, setDiritti] = useState("2")
+  const [modalitaPrenotazione, setModalitaPrenotazione] = useState<ModalitaPrenotazione>("posti_assegnati")
   const [locandinaUrl, setLocandinaUrl] = useState<string | null>(null)
   const [locandinaUploading, setLocandinaUploading] = useState(false)
   const [locandinaPath, setLocandinaPath] = useState<string | null>(null)
@@ -87,6 +91,7 @@ export function SpettacoliSection() {
     setEnteOrganizzatore("")
     setPrezzo("15")
     setDiritti("2")
+    setModalitaPrenotazione("posti_assegnati")
     setLocandinaUrl(null)
     setLocandinaPath(null)
     if (fileRef.current) fileRef.current.value = ""
@@ -99,6 +104,7 @@ export function SpettacoliSection() {
     setEnteOrganizzatore(row.ente_organizzatore ?? "")
     setPrezzo(String(row.prezzo_biglietto ?? 15))
     setDiritti(String(row.diritti_prevendita ?? 2))
+    setModalitaPrenotazione(row.modalita_prenotazione === "posto_unico" ? "posto_unico" : "posti_assegnati")
     setLocandinaUrl(row.locandina_url)
     setLocandinaPath(null)
     if (fileRef.current) fileRef.current.value = ""
@@ -189,6 +195,7 @@ export function SpettacoliSection() {
       locandina_url: locandinaUrl,
       prezzo_biglietto: p,
       diritti_prevendita: d,
+      modalita_prenotazione: modalitaPrenotazione,
     }
 
     if (editingId) {
@@ -220,7 +227,9 @@ export function SpettacoliSection() {
         .eq("spettacolo_id", sid)
         .filter("replica_id", "is", null)
 
-      if (!cErr && (count ?? 0) === 0) {
+      if (modalitaPrenotazione === "posto_unico") {
+        // Nessuna griglia posti: capienza dalla sala (file × posti per fila).
+      } else if (!cErr && (count ?? 0) === 0) {
         const postiRows = buildPostiGridForSpettacolo(sid, teatro.numero_file, teatro.posti_per_fila)
         for (let i = 0; i < postiRows.length; i += POSTI_CHUNK) {
           const chunk = postiRows.slice(i, i + POSTI_CHUNK)
@@ -266,7 +275,7 @@ export function SpettacoliSection() {
         <CardHeader>
           <CardTitle>{editingId ? "Modifica spettacolo" : "Nuovo spettacolo"}</CardTitle>
           <CardDescription>
-            Prezzi in euro; locandina su Storage. In creazione, generazione posti se assenti.
+            Prezzi in euro; locandina su Storage. Con posti assegnati, in creazione si genera la griglia se assente.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -325,6 +334,47 @@ export function SpettacoliSection() {
                   placeholder="Es. Associazione Culturale Teatro Vivo"
                 />
               </div>
+              <fieldset className="space-y-2 rounded-md border border-border/80 p-3">
+                <legend className="px-1 text-sm font-medium text-foreground">Modalità prenotazione online</legend>
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="modalita-prenotazione"
+                    className="mt-1"
+                    checked={modalitaPrenotazione === "posti_assegnati"}
+                    onChange={() => setModalitaPrenotazione("posti_assegnati")}
+                    disabled={Boolean(editingId)}
+                  />
+                  <span>
+                    <span className="font-medium">Posti assegnati</span>
+                    <span className="block text-muted-foreground text-xs">
+                      Mappa dei posti: l&apos;utente sceglie i numeri di posto.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="modalita-prenotazione"
+                    className="mt-1"
+                    checked={modalitaPrenotazione === "posto_unico"}
+                    onChange={() => setModalitaPrenotazione("posto_unico")}
+                    disabled={Boolean(editingId)}
+                  />
+                  <span>
+                    <span className="font-medium">Posto unico (platea / ingresso libero)</span>
+                    <span className="block text-muted-foreground text-xs">
+                      Nessuna mappa: solo quantità di biglietti, fino alla capienza della sala (file × posti per fila del
+                      teatro).
+                    </span>
+                  </span>
+                </label>
+                {editingId && (
+                  <p className="text-xs text-muted-foreground">
+                    La modalità non è modificabile dopo la creazione. Per cambiare, crea un nuovo spettacolo.
+                  </p>
+                )}
+              </fieldset>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label htmlFor="s-prezzo" className="mb-1 block text-sm font-medium">
@@ -426,8 +476,10 @@ export function SpettacoliSection() {
                     <div>
                       <p className="font-medium text-foreground">{row.nome_spettacolo}</p>
                       <p className="text-muted-foreground">
-                        Teatro: {teatroLabel(row.teatro_id)} · €{Number(row.prezzo_biglietto ?? 0).toFixed(2)} + €
-                        {Number(row.diritti_prevendita ?? 0).toFixed(2)} prev.
+                        Teatro: {teatroLabel(row.teatro_id)} ·{" "}
+                        {row.modalita_prenotazione === "posto_unico" ? "Posto unico" : "Posti assegnati"} · €
+                        {Number(row.prezzo_biglietto ?? 0).toFixed(2)} + €{Number(row.diritti_prevendita ?? 0).toFixed(2)}{" "}
+                        prev.
                       </p>
                       {row.ente_organizzatore && (
                         <p className="text-muted-foreground">Organizzato da: {row.ente_organizzatore}</p>
