@@ -1,25 +1,33 @@
 import { NextResponse } from "next/server"
 import Stripe from "stripe"
 import { createClient } from "@supabase/supabase-js"
+import {
+  capienzaFromTeatro,
+  collectOccupiedSeatCodes,
+  countBookedTicketsFromPrenotazioni,
+  pendingHoldCutoffIso,
+  prenotazioniAvailabilityOrFilter,
+} from "@/lib/booking/prenotazioni-utils"
+
+export const runtime = "nodejs"
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
   apiVersion: "2026-03-25.dahlia",
 })
 
-function getSupabaseServer() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !key) {
-    throw new Error("Variabili Supabase mancanti (NEXT_PUBLIC_SUPABASE_URL o chiave).")
-  }
-  return createClient(url, key)
-}
-
 const DEFAULT_PREZZO_EUR = 15
 const DEFAULT_DIRITTI_EUR = 2
 
 type Prezzi = { prezzo_biglietto: number; diritti_prevendita: number }
+
+function getSupabaseService() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY richiesta per il checkout.")
+  }
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+}
 
 function applyPrezziFromRow(
   row: { prezzo_biglietto?: number | null; diritti_prevendita?: number | null } | null,
@@ -34,18 +42,13 @@ function applyPrezziFromRow(
   return next
 }
 
-/**
- * Recupera prezzo_biglietto e diritti_prevendita da public.spettacoli:
- * 1) Se è presente replica_id: join repliche → spettacoli (stesso spettacolo della prenotazione).
- * 2) Altrimenti, se è presente spettacolo_id: lettura diretta su spettacoli.
- */
 async function fetchPrezziFromSupabase(replicaId: string, spettacoloId: string): Promise<Prezzi> {
   let prezzi: Prezzi = {
     prezzo_biglietto: DEFAULT_PREZZO_EUR,
     diritti_prevendita: DEFAULT_DIRITTI_EUR,
   }
 
-  const supabase = getSupabaseServer()
+  const supabase = getSupabaseService()
 
   if (replicaId) {
     const { data: replicaRow, error: replicaErr } = await supabase
@@ -82,25 +85,119 @@ async function fetchPrezziFromSupabase(replicaId: string, spettacoloId: string):
 }
 
 export async function POST(request: Request) {
+  let session: Stripe.Checkout.Session | null = null
+
   try {
     const body = await request.json()
     const seats = Array.isArray(body.seats) ? body.seats : []
-    const safeSeats = seats.map((s: unknown) => String(s))
-    const safeReplicaId = body.replicaId != null ? String(body.replicaId) : ""
-    const safeSpettacoloId = body.spettacoloId != null ? String(body.spettacoloId) : ""
+    const safeSeats: string[] = Array.from(
+      new Set(seats.map((s: unknown) => String(s).trim()).filter(Boolean)),
+    ) as string[]
+    const safeReplicaId = body.replicaId != null ? String(body.replicaId).trim() : ""
+    const safeSpettacoloId = body.spettacoloId != null ? String(body.spettacoloId).trim() : ""
+    const bookingModeRaw = String(body.bookingMode ?? "posti_assegnati").trim()
+    const bookingMode = bookingModeRaw === "posto_unico" ? "posto_unico" : "posti_assegnati"
+
+    const nome = String(body.customer?.nome ?? "").trim()
+    const cognome = String(body.customer?.cognome ?? "").trim()
+    const email = String(body.customer?.email ?? "").trim()
+    const telefono = String(body.customer?.telefono ?? "").trim()
+
+    if (!safeReplicaId || safeSeats.length === 0 || !nome || !cognome || !email) {
+      return NextResponse.json({ error: "Payload checkout non valido." }, { status: 400 })
+    }
+
+    const supabase = getSupabaseService()
+
+    const { data: replicaRow, error: replicaErr } = await supabase
+      .from("repliche")
+      .select("id, spettacolo_id")
+      .eq("id", safeReplicaId)
+      .maybeSingle()
+
+    if (replicaErr || !replicaRow) {
+      return NextResponse.json({ error: "Replica non trovata." }, { status: 400 })
+    }
+
+    const spettacoloId = String(replicaRow.spettacolo_id ?? safeSpettacoloId).trim()
+    const { data: spettacoloRow, error: spettacoloErr } = await supabase
+      .from("spettacoli")
+      .select("modalita_prenotazione, teatro_id, prezzo_biglietto, diritti_prevendita")
+      .eq("id", spettacoloId)
+      .maybeSingle()
+
+    if (spettacoloErr || !spettacoloRow) {
+      return NextResponse.json({ error: "Spettacolo non trovato." }, { status: 400 })
+    }
+
+    const modalitaDb = String(spettacoloRow.modalita_prenotazione ?? "posti_assegnati").trim()
+    const isPostoUnicoDb = modalitaDb === "posto_unico"
+    if (bookingMode === "posto_unico" && !isPostoUnicoDb) {
+      return NextResponse.json({ error: "Modalità prenotazione non valida per questo spettacolo." }, { status: 400 })
+    }
+    if (bookingMode === "posti_assegnati" && isPostoUnicoDb) {
+      return NextResponse.json({ error: "Questo spettacolo usa posto unico." }, { status: 400 })
+    }
+
+    const fifteenMinutesAgo = pendingHoldCutoffIso()
+
+    const { data: statusRows, error: statusError } = await supabase
+      .from("prenotazioni")
+      .select("posti_prenotati, stato_pagamento, created_at")
+      .eq("replica_id", safeReplicaId)
+      .or(prenotazioniAvailabilityOrFilter(fifteenMinutesAgo))
+
+    if (statusError) {
+      return NextResponse.json({ error: statusError.message }, { status: 500 })
+    }
+
+    if (bookingMode === "posto_unico") {
+      const teatroId = String(spettacoloRow.teatro_id ?? "").trim()
+      if (!teatroId) {
+        return NextResponse.json({ error: "Teatro non configurato." }, { status: 400 })
+      }
+
+      const { data: teatroRow, error: teatroErr } = await supabase
+        .from("teatri")
+        .select("numero_file, posti_per_fila")
+        .eq("id", teatroId)
+        .maybeSingle()
+
+      if (teatroErr || !teatroRow) {
+        return NextResponse.json({ error: "Impossibile leggere la capienza del teatro." }, { status: 500 })
+      }
+
+      const capienza = capienzaFromTeatro(Number(teatroRow.numero_file), Number(teatroRow.posti_per_fila))
+      if (capienza <= 0) {
+        return NextResponse.json({ error: "Capienza teatro non disponibile." }, { status: 400 })
+      }
+
+      const booked = countBookedTicketsFromPrenotazioni(statusRows ?? [])
+      const rimanenti = capienza - booked
+      if (safeSeats.length > rimanenti) {
+        return NextResponse.json(
+          { error: rimanenti <= 0 ? "Spettacolo sold out." : "Posti insufficienti per la quantità richiesta." },
+          { status: 409 },
+        )
+      }
+    } else {
+      const occupied = collectOccupiedSeatCodes(statusRows ?? [])
+      const taken = safeSeats.filter((code: string) => occupied.has(code.toUpperCase()))
+      if (taken.length > 0) {
+        return NextResponse.json({ error: "Uno o più posti non sono più disponibili." }, { status: 409 })
+      }
+    }
 
     const { prezzo_biglietto: prezzoBigliettoEur, diritti_prevendita: dirittiPrevenditaEur } =
-      await fetchPrezziFromSupabase(safeReplicaId, safeSpettacoloId)
+      await fetchPrezziFromSupabase(safeReplicaId, spettacoloId)
 
     const unitAmountTicketCents = Math.round(prezzoBigliettoEur * 100)
     const unitAmountFeeCents = Math.round(dirittiPrevenditaEur * 100)
 
-    const line_items = safeSeats.map((seatString: string) => {
+    const line_items = (safeSeats as string[]).map((seatString: string) => {
       const match = seatString.match(/([a-zA-Z]+)(\d+)/)
-
       let fila = ""
       let numero = ""
-
       if (match) {
         fila = match[1]
         numero = match[2]
@@ -134,19 +231,45 @@ export async function POST(request: Request) {
       quantity: safeSeats.length,
     })
 
-    const origin = request.headers.get("origin")
-    const replicaQuery = safeReplicaId ? `&replica_id=${encodeURIComponent(safeReplicaId)}` : ""
+    const origin = request.headers.get("origin") ?? ""
+    const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL ?? origin).replace(/\/$/, "")
+    const replicaPrefix = safeReplicaId ? `replica_id=${encodeURIComponent(safeReplicaId)}&` : ""
 
-    const session = await stripe.checkout.sessions.create({
+    session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
-      line_items: line_items,
-      success_url: `${origin}/?success=true&session_id={CHECKOUT_SESSION_ID}${replicaQuery}`,
-      cancel_url: `${origin}/?canceled=true${replicaQuery}`,
+      line_items,
+      metadata: {
+        replica_id: safeReplicaId,
+        modalita_prenotazione: bookingMode,
+      },
+      success_url: `${baseUrl}/?${replicaPrefix}success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/?replica_id=${encodeURIComponent(safeReplicaId)}&canceled=true&session_id={CHECKOUT_SESSION_ID}`,
     })
+
+    const rowsToInsert = safeSeats.map((seatCode) => ({
+      replica_id: safeReplicaId,
+      nome,
+      cognome,
+      email,
+      telefono: telefono || null,
+      posti_prenotati: [seatCode],
+      stripe_session_id: session!.id,
+      stato_pagamento: "pending",
+    }))
+
+    const { error: insertErr } = await supabase.from("prenotazioni").insert(rowsToInsert)
+
+    if (insertErr) {
+      await stripe.checkout.sessions.expire(session.id).catch(() => undefined)
+      return NextResponse.json({ error: insertErr.message }, { status: 500 })
+    }
 
     return NextResponse.json({ url: session.url })
   } catch (err: unknown) {
+    if (session?.id) {
+      await stripe.checkout.sessions.expire(session.id).catch(() => undefined)
+    }
     const message = err instanceof Error ? err.message : "Errore sconosciuto"
     return NextResponse.json({ error: message }, { status: 500 })
   }

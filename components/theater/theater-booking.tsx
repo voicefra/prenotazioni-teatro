@@ -9,6 +9,12 @@ import { Cart, type CartBookingMode } from "./cart"
 import { Legend } from "./legend"
 import type { SeatStatus } from "./seat"
 import { formatTimeHHmm } from "@/lib/datetime-format"
+import {
+  collectOccupiedSeatCodes,
+  countBookedTicketsFromPrenotazioni,
+  pendingHoldCutoffIso,
+  prenotazioniAvailabilityOrFilter,
+} from "@/lib/booking/prenotazioni-utils"
 import { supabase } from "@/lib/supabase"
 
 interface Seat {
@@ -60,6 +66,7 @@ interface TeatroInfoRow {
 interface PrenotazioneStatusRow {
   posti_prenotati: string[] | string | null
   stato_pagamento: "pending" | "paid" | "failed" | string
+  created_at?: string | null
 }
 
 interface BookingFormData {
@@ -79,26 +86,8 @@ interface PendingCheckoutData {
 const PENDING_SEATS_KEY = "pending_seats"
 const PENDING_CHECKOUT_DATA_KEY = "pending_checkout_data"
 
-const BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT =
-  "Il pagamento è andato a buon fine, ma l'invio della ricevuta di prenotazione ha riscontrato un problema. Controlla la tua email o contatta l'assistenza."
-
 const FISCAL_DISCLAIMER =
   "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
-
-async function readSendTicketFailureDetails(res: Response): Promise<string> {
-  const ct = (res.headers.get("content-type") || "").toLowerCase()
-  try {
-    if (ct.includes("application/json")) {
-      const j = (await res.json()) as { error?: string; code?: string }
-      const line = [j.code, j.error].filter(Boolean).join(" — ")
-      return line || "(JSON senza messaggio)"
-    }
-    const text = await res.text()
-    return text.slice(0, 2000) || "(corpo vuoto)"
-  } catch (e) {
-    return e instanceof Error ? e.message : "lettura risposta fallita"
-  }
-}
 
 const initialFormData: BookingFormData = {
   nome: "",
@@ -221,17 +210,6 @@ function pickReplicaOrarioLabel(row: ReplicaRow): string {
   return formatTimeHHmm(row.data_evento ?? row.data ?? row.data_ora)
 }
 
-function normalizeBookedSeats(value: string[] | string | null | undefined): string[] {
-  if (Array.isArray(value)) return value.map((seat) => String(seat).trim()).filter(Boolean)
-  if (value == null) return []
-  const seat = String(value).trim()
-  return seat ? [seat] : []
-}
-
-function countBookedTicketsFromPrenotazioni(rows: PrenotazioneStatusRow[]): number {
-  return rows.reduce((sum, row) => sum + normalizeBookedSeats(row.posti_prenotati).length, 0)
-}
-
 function generateUnicoSeatCodes(count: number): string[] {
   const out: string[] = []
   for (let i = 0; i < count; i++) {
@@ -246,10 +224,13 @@ function generateUnicoSeatCodes(count: number): string[] {
 export function TheaterBooking() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const replicaId = searchParams.get("replica_id")
+  const replicaIdFromUrl = searchParams.get("replica_id")?.trim() || ""
+  const effectiveReplicaId =
+    replicaIdFromUrl || safeReadPendingCheckoutData()?.replicaId?.trim() || ""
 
   const [seats, setSeats] = useState<Seat[]>([])
-  const [isLoadingSeats, setIsLoadingSeats] = useState(true)
+  const [isLoadingSeats, setIsLoadingSeats] = useState(false)
+  const [loadSeatsError, setLoadSeatsError] = useState<string | null>(null)
   const [selectedReplicaId, setSelectedReplicaId] = useState<string | null>(null)
   const [selectedSpettacoloId, setSelectedSpettacoloId] = useState<string | null>(null)
   const [selectedSpettacoloTitle, setSelectedSpettacoloTitle] = useState<string>("Spettacolo")
@@ -271,230 +252,268 @@ export function TheaterBooking() {
   const [isDataModalOpen, setIsDataModalOpen] = useState(false)
   const [isSubmittingBooking, setIsSubmittingBooking] = useState(false)
   const [formData, setFormData] = useState<BookingFormData>(initialFormData)
+  const [isVerifyingPayment, setIsVerifyingPayment] = useState(false)
+  const [bookingConfirmed, setBookingConfirmed] = useState(false)
+  const [bookingConfirmMessage, setBookingConfirmMessage] = useState<string | null>(null)
+  const [paymentVerifyError, setPaymentVerifyError] = useState<string | null>(null)
+  const [cancelToastMessage, setCancelToastMessage] = useState<string | null>(null)
 
   // Evita doppie esecuzioni in dev (React Strict Mode)
   const successHandledRef = useRef(false)
   const canceledHandledRef = useRef(false)
+  const loadSeatsRequestRef = useRef(0)
 
   const loadSeats = useCallback(async () => {
-    if (!replicaId) {
+    const targetReplicaId = effectiveReplicaId
+    if (!targetReplicaId) {
       setSeats([])
       setIsLoadingSeats(false)
       return
     }
 
+    const requestId = ++loadSeatsRequestRef.current
     setIsLoadingSeats(true)
+    setLoadSeatsError(null)
 
-    /**
-     * 1) Replica: niente join annidato qui (se la FK o i nomi colonne non coincidono, la join fallisce o torna vuota).
-     *    Usiamo select('*') per allinearci allo schema reale su Supabase.
-     */
-    const { data: replicaData, error: replicaError } = await supabase
-      .from("repliche")
-      .select("*")
-      .eq("id", replicaId)
-      .maybeSingle()
-
-    if (replicaError) {
-      logSupabaseError("[repliche]", replicaError)
-      setSeats([])
-      setIsLoadingSeats(false)
-      return
-    }
-
-    if (!replicaData) {
-      console.log(
-        "[repliche] Nessuna riga per id=",
-        replicaId,
-        "(verifica RLS, tipo UUID vs testo, o che la replica esista)."
-      )
-      setSeats([])
-      setIsLoadingSeats(false)
-      return
-    }
-
-    const replica = replicaData as ReplicaRow
-    const spettacoloId = pickSpettacoloIdFromReplica(replica)
-
-    if (!spettacoloId) {
-      console.log("[repliche] Impossibile ricavare l'ID spettacolo dalla riga:", replicaData)
-      setSeats([])
-      setIsLoadingSeats(false)
-      return
-    }
-
-    setSelectedReplicaId(String(replica.id))
-    setSelectedSpettacoloId(spettacoloId)
-
-    const deRaw = replica.data_evento ?? replica.data ?? replica.data_ora
-    setBookingDateLabel(formatDataEventoItDateOnly(deRaw) || "—")
-    setBookingOrarioLabel(pickReplicaOrarioLabel(replica) || "—")
-
-    const { data: spettacoloRow, error: spettacoloErr } = await supabase
-      .from("spettacoli")
-      .select("teatro_id, nome_spettacolo, ente_organizzatore, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione")
-      .eq("id", spettacoloId)
-      .maybeSingle()
-
-    if (spettacoloErr) {
-      logSupabaseError("[spettacoli]", spettacoloErr)
-    }
-
-    const show = (spettacoloRow ?? null) as SpettacoloHeaderRow | null
-    setSelectedSpettacoloTitle(String(show?.nome_spettacolo ?? "Spettacolo"))
-    setSelectedEnteOrganizzatore(String(show?.ente_organizzatore ?? "").trim())
-
-    const teatroId = String(show?.teatro_id ?? "").trim()
-    let capienzaSala = 0
-    if (teatroId) {
-      const { data: teatroRow, error: teatroErr } = await supabase
-        .from("teatri")
-        .select("nome_teatro, indirizzo, comune, telefono, numero_file, posti_per_fila")
-        .eq("id", teatroId)
+    try {
+      const { data: replicaData, error: replicaError } = await supabase
+        .from("repliche")
+        .select("*")
+        .eq("id", targetReplicaId)
         .maybeSingle()
-      if (teatroErr) {
-        logSupabaseError("[teatri]", teatroErr)
-      }
-      const teatro = (teatroRow ?? null) as TeatroInfoRow | null
-      setTeatroNome(String(teatro?.nome_teatro ?? "").trim() || "Dati non disponibili")
-      setTeatroIndirizzo(String(teatro?.indirizzo ?? "").trim() || "Dati non disponibili")
-      setTeatroComune(String(teatro?.comune ?? "").trim() || "Dati non disponibili")
-      setTeatroTelefono(String(teatro?.telefono ?? "").trim() || "Dati non disponibili")
-      const nf = Math.floor(Number(teatro?.numero_file ?? 0))
-      const pp = Math.floor(Number(teatro?.posti_per_fila ?? 0))
-      capienzaSala = Number.isFinite(nf) && Number.isFinite(pp) && nf > 0 && pp > 0 ? nf * pp : 0
-      setTeatroCapienzaTotale(capienzaSala)
-    } else {
-      setTeatroNome("Dati non disponibili")
-      setTeatroIndirizzo("Dati non disponibili")
-      setTeatroComune("Dati non disponibili")
-      setTeatroTelefono("Dati non disponibili")
-      setTeatroCapienzaTotale(0)
-      capienzaSala = 0
-    }
 
-    const prezzoPosto = (() => {
-      const raw = show?.prezzo_biglietto
-      const n = typeof raw === "number" ? raw : Number.parseFloat(String(raw ?? ""))
-      return Number.isFinite(n) && n >= 0 ? n : 15
-    })()
-
-    const dirittiPosto = (() => {
-      const raw = show?.diritti_prevendita
-      const n = typeof raw === "number" ? raw : Number.parseFloat(String(raw ?? ""))
-      return Number.isFinite(n) && n >= 0 ? n : 2
-    })()
-
-    setPrezzoBigliettoEur(prezzoPosto)
-    setDirittiPrevenditaEur(dirittiPosto)
-
-    const modalitaRaw = String(show?.modalita_prenotazione ?? "posti_assegnati").trim()
-    const isPostoUnico = modalitaRaw === "posto_unico"
-    setBookingMode(isPostoUnico ? "posto_unico" : "posti_assegnati")
-
-    const { data: statusRows, error: statusError } = await supabase
-      .from("prenotazioni")
-      .select("posti_prenotati, stato_pagamento")
-      .eq("replica_id", replicaId)
-      .in("stato_pagamento", ["pending", "paid"])
-
-    if (statusError) {
-      logSupabaseError("[prenotazioni disponibilità]", statusError)
-      setSeats([])
-      setIsLoadingSeats(false)
-      return
-    }
-
-    const statusTyped = (statusRows ?? []) as PrenotazioneStatusRow[]
-    const bookedTickets = countBookedTicketsFromPrenotazioni(statusTyped)
-
-    if (isPostoUnico) {
-      const rimanenti = Math.max(0, capienzaSala - bookedTickets)
-      setPostoUnicoPostiRimanenti(rimanenti)
-      setPostoUnicoQuantity((prev) => {
-        if (rimanenti <= 0) return 0
-        const p = Math.floor(Number(prev))
-        const base = Number.isFinite(p) && p >= 1 ? p : 1
-        return Math.min(base, rimanenti)
-      })
-      setSeats([])
-      setIsLoadingSeats(false)
-      return
-    }
-
-    /**
-     * Posti assegnati: priorità a replica_id (mappa per quella replica).
-     * Se la colonna non esiste o non ci sono righe, fallback su spettacolo_id (mappa unica per spettacolo).
-     */
-    let postiRows: PostoRow[] = []
-    const byReplica = await supabase.from("posti").select("id, numero_posto").eq("replica_id", replicaId)
-
-    if (byReplica.error) {
-      logSupabaseError("[posti per replica_id]", byReplica.error)
-    }
-
-    if (!byReplica.error && byReplica.data && byReplica.data.length > 0) {
-      postiRows = byReplica.data as PostoRow[]
-      console.log("[posti] Caricati per replica_id=", replicaId, "count=", postiRows.length)
-    } else {
-      const byShow = await supabase.from("posti").select("id, numero_posto").eq("spettacolo_id", spettacoloId)
-
-      if (byShow.error) {
-        logSupabaseError("[posti per spettacolo_id]", byShow.error)
+      if (replicaError) {
+        logSupabaseError("[repliche]", replicaError)
         setSeats([])
-        setIsLoadingSeats(false)
+        setLoadSeatsError("Impossibile caricare la replica. Riprova tra poco.")
         return
       }
 
-      postiRows = (byShow.data ?? []) as PostoRow[]
-      console.log(
-        "[posti] Fallback spettacolo_id=",
-        spettacoloId,
-        "count=",
-        postiRows.length,
-        byReplica.error || !byReplica.data?.length
-          ? "(replica_id assente, vuoto, o colonna diversa)"
-          : ""
-      )
-    }
-
-    const notFreeSeatCodes = new Set<string>()
-    statusTyped.forEach((row) => {
-      normalizeBookedSeats(row.posti_prenotati).forEach((seatCode) => {
-        notFreeSeatCodes.add(String(seatCode).toUpperCase())
-      })
-    })
-
-    const mappedSeats: Seat[] = postiRows.map((posto) => {
-      const parsedSeat = parseNumeroPosto(posto.numero_posto)
-      const seatCode = `${parsedSeat.row}${parsedSeat.number}`.toUpperCase()
-
-      return {
-        id: String(posto.id),
-        row: parsedSeat.row,
-        number: parsedSeat.number,
-        status: notFreeSeatCodes.has(seatCode) ? "occupied" : "free",
-        price: prezzoPosto,
+      if (!replicaData) {
+        console.log(
+          "[repliche] Nessuna riga per id=",
+          targetReplicaId,
+          "(verifica RLS, tipo UUID vs testo, o che la replica esista).",
+        )
+        setSeats([])
+        setLoadSeatsError("Replica non trovata.")
+        return
       }
-    })
 
-    mappedSeats.sort((a, b) => {
-      const rowCompare = a.row.localeCompare(b.row, undefined, { numeric: true })
-      if (rowCompare !== 0) return rowCompare
-      return a.number - b.number
-    })
+      const replica = replicaData as ReplicaRow
+      const spettacoloId = pickSpettacoloIdFromReplica(replica)
 
-    setSeats(mappedSeats)
-    setIsLoadingSeats(false)
-  }, [replicaId])
+      if (!spettacoloId) {
+        console.log("[repliche] Impossibile ricavare l'ID spettacolo dalla riga:", replicaData)
+        setSeats([])
+        setLoadSeatsError("Spettacolo non trovato per questa replica.")
+        return
+      }
+
+      if (requestId !== loadSeatsRequestRef.current) return
+
+      setSelectedReplicaId(String(replica.id))
+      setSelectedSpettacoloId(spettacoloId)
+
+      const deRaw = replica.data_evento ?? replica.data ?? replica.data_ora
+      setBookingDateLabel(formatDataEventoItDateOnly(deRaw) || "—")
+      setBookingOrarioLabel(pickReplicaOrarioLabel(replica) || "—")
+
+      const { data: spettacoloRow, error: spettacoloErr } = await supabase
+        .from("spettacoli")
+        .select("teatro_id, nome_spettacolo, ente_organizzatore, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione")
+        .eq("id", spettacoloId)
+        .maybeSingle()
+
+      if (spettacoloErr) {
+        logSupabaseError("[spettacoli]", spettacoloErr)
+      }
+
+      const show = (spettacoloRow ?? null) as SpettacoloHeaderRow | null
+      setSelectedSpettacoloTitle(String(show?.nome_spettacolo ?? "Spettacolo"))
+      setSelectedEnteOrganizzatore(String(show?.ente_organizzatore ?? "").trim())
+
+      const teatroId = String(show?.teatro_id ?? "").trim()
+      let capienzaSala = 0
+      if (teatroId) {
+        const { data: teatroRow, error: teatroErr } = await supabase
+          .from("teatri")
+          .select("nome_teatro, indirizzo, comune, telefono, numero_file, posti_per_fila")
+          .eq("id", teatroId)
+          .maybeSingle()
+        if (teatroErr) {
+          logSupabaseError("[teatri]", teatroErr)
+        }
+        const teatro = (teatroRow ?? null) as TeatroInfoRow | null
+        setTeatroNome(String(teatro?.nome_teatro ?? "").trim() || "Dati non disponibili")
+        setTeatroIndirizzo(String(teatro?.indirizzo ?? "").trim() || "Dati non disponibili")
+        setTeatroComune(String(teatro?.comune ?? "").trim() || "Dati non disponibili")
+        setTeatroTelefono(String(teatro?.telefono ?? "").trim() || "Dati non disponibili")
+        const nf = Math.floor(Number(teatro?.numero_file ?? 0))
+        const pp = Math.floor(Number(teatro?.posti_per_fila ?? 0))
+        capienzaSala = Number.isFinite(nf) && Number.isFinite(pp) && nf > 0 && pp > 0 ? nf * pp : 0
+        setTeatroCapienzaTotale(capienzaSala)
+      } else {
+        setTeatroNome("Dati non disponibili")
+        setTeatroIndirizzo("Dati non disponibili")
+        setTeatroComune("Dati non disponibili")
+        setTeatroTelefono("Dati non disponibili")
+        setTeatroCapienzaTotale(0)
+        capienzaSala = 0
+      }
+
+      const prezzoPosto = (() => {
+        const raw = show?.prezzo_biglietto
+        const n = typeof raw === "number" ? raw : Number.parseFloat(String(raw ?? ""))
+        return Number.isFinite(n) && n >= 0 ? n : 15
+      })()
+
+      const dirittiPosto = (() => {
+        const raw = show?.diritti_prevendita
+        const n = typeof raw === "number" ? raw : Number.parseFloat(String(raw ?? ""))
+        return Number.isFinite(n) && n >= 0 ? n : 2
+      })()
+
+      setPrezzoBigliettoEur(prezzoPosto)
+      setDirittiPrevenditaEur(dirittiPosto)
+
+      const modalitaRaw = String(show?.modalita_prenotazione ?? "posti_assegnati").trim()
+      const isPostoUnico = modalitaRaw === "posto_unico"
+      setBookingMode(isPostoUnico ? "posto_unico" : "posti_assegnati")
+
+      const holdCutoff = pendingHoldCutoffIso()
+
+      const { data: statusRows, error: statusError } = await supabase
+        .from("prenotazioni")
+        .select("posti_prenotati, stato_pagamento, created_at")
+        .eq("replica_id", targetReplicaId)
+        .or(prenotazioniAvailabilityOrFilter(holdCutoff))
+
+      if (statusError) {
+        logSupabaseError("[prenotazioni disponibilità]", statusError)
+        setSeats([])
+        setLoadSeatsError("Impossibile verificare la disponibilità dei posti.")
+        return
+      }
+
+      if (requestId !== loadSeatsRequestRef.current) return
+
+      const statusTyped = (statusRows ?? []) as PrenotazioneStatusRow[]
+      const bookedTickets = countBookedTicketsFromPrenotazioni(statusTyped)
+
+      if (isPostoUnico) {
+        const rimanenti = Math.max(0, capienzaSala - bookedTickets)
+        setPostoUnicoPostiRimanenti(rimanenti)
+        setPostoUnicoQuantity((prev) => {
+          if (rimanenti <= 0) return 0
+          const p = Math.floor(Number(prev))
+          const base = Number.isFinite(p) && p >= 1 ? p : 1
+          return Math.min(base, rimanenti)
+        })
+        setSeats([])
+        return
+      }
+
+      let postiRows: PostoRow[] = []
+      const byReplica = await supabase.from("posti").select("id, numero_posto").eq("replica_id", targetReplicaId)
+
+      if (byReplica.error) {
+        logSupabaseError("[posti per replica_id]", byReplica.error)
+      }
+
+      if (!byReplica.error && byReplica.data && byReplica.data.length > 0) {
+        postiRows = byReplica.data as PostoRow[]
+        console.log("[posti] Caricati per replica_id=", targetReplicaId, "count=", postiRows.length)
+      } else {
+        const byShow = await supabase.from("posti").select("id, numero_posto").eq("spettacolo_id", spettacoloId)
+
+        if (byShow.error) {
+          logSupabaseError("[posti per spettacolo_id]", byShow.error)
+          setSeats([])
+          setLoadSeatsError("Impossibile caricare la mappa dei posti.")
+          return
+        }
+
+        postiRows = (byShow.data ?? []) as PostoRow[]
+        console.log(
+          "[posti] Fallback spettacolo_id=",
+          spettacoloId,
+          "count=",
+          postiRows.length,
+          byReplica.error || !byReplica.data?.length
+            ? "(replica_id assente, vuoto, o colonna diversa)"
+            : "",
+        )
+      }
+
+      if (requestId !== loadSeatsRequestRef.current) return
+
+      const notFreeSeatCodes = collectOccupiedSeatCodes(statusTyped)
+
+      const mappedSeats: Seat[] = postiRows.map((posto) => {
+        const parsedSeat = parseNumeroPosto(posto.numero_posto)
+        const seatCode = `${parsedSeat.row}${parsedSeat.number}`.toUpperCase()
+
+        return {
+          id: String(posto.id),
+          row: parsedSeat.row,
+          number: parsedSeat.number,
+          status: notFreeSeatCodes.has(seatCode) ? "occupied" : "free",
+          price: prezzoPosto,
+        }
+      })
+
+      mappedSeats.sort((a, b) => {
+        const rowCompare = a.row.localeCompare(b.row, undefined, { numeric: true })
+        if (rowCompare !== 0) return rowCompare
+        return a.number - b.number
+      })
+
+      setSeats(mappedSeats)
+    } catch (err) {
+      console.error("[loadSeats] unhandled:", err)
+      if (requestId === loadSeatsRequestRef.current) {
+        setSeats([])
+        setLoadSeatsError("Errore imprevisto durante il caricamento della replica.")
+      }
+    } finally {
+      if (requestId === loadSeatsRequestRef.current) {
+        setIsLoadingSeats(false)
+      }
+    }
+  }, [effectiveReplicaId])
 
   useEffect(() => {
-    if (!replicaId) {
-      router.replace("/spettacoli")
+    if (!effectiveReplicaId) {
+      setIsLoadingSeats(false)
       return
     }
-    loadSeats()
-  }, [replicaId, router, loadSeats])
+    void loadSeats()
+  }, [effectiveReplicaId, loadSeats])
+
+  useEffect(() => {
+    void fetch("/api/cleanup", { method: "GET" }).catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    if (searchParams.get("canceled") !== "true") {
+      canceledHandledRef.current = false
+    }
+    if (searchParams.get("success") !== "true") {
+      successHandledRef.current = false
+    }
+  }, [searchParams])
+
+  useEffect(() => {
+    const handleWakeUp = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        window.location.reload()
+      }
+    }
+
+    window.addEventListener("pageshow", handleWakeUp)
+    return () => window.removeEventListener("pageshow", handleWakeUp)
+  }, [])
 
   // Gestione annullamento pagamento (?canceled=true)
   useEffect(() => {
@@ -507,19 +526,49 @@ export function TheaterBooking() {
 
       canceledHandledRef.current = true
 
-      const pendingSeatIds = safeReadPendingSeats()
-      if (pendingSeatIds.length > 0) console.info("Checkout annullato, rilascio locale posti pending")
+      const sessionId = (params.get("session_id") || "").trim()
+      const pendingCheckout = safeReadPendingCheckoutData()
+      const replicaIdParam = (
+        params.get("replica_id") ||
+        effectiveReplicaId ||
+        pendingCheckout?.replicaId ||
+        ""
+      ).trim()
+
+      if (sessionId) {
+        try {
+          const cancelRes = await fetch(
+            `/api/checkout/cancel?session_id=${encodeURIComponent(sessionId)}`,
+            { method: "GET", headers: { Accept: "application/json" } },
+          )
+          if (!cancelRes.ok) {
+            const errJson = (await cancelRes.json().catch(() => ({}))) as { error?: string }
+            console.error("[checkout/cancel] non OK:", cancelRes.status, errJson)
+          }
+        } catch (e) {
+          console.error("[checkout/cancel] fetch fallita:", e)
+        }
+      }
 
       clearPendingStorage()
-      removeQueryParams(["canceled", "session_id"])
-      await loadSeats()
-      alert("Pagamento annullato, i posti sono tornati liberi")
+
+      if (replicaIdParam) {
+        router.replace(`/?replica_id=${encodeURIComponent(replicaIdParam)}`, { scroll: false })
+      } else {
+        removeQueryParams(["canceled", "session_id"])
+        router.replace("/spettacoli", { scroll: false })
+      }
+      router.refresh()
+      if (replicaIdParam) await loadSeats()
+
+      setCancelToastMessage("Prenotazione annullata.")
+      window.setTimeout(() => setCancelToastMessage(null), 5000)
     }
 
     void handleCanceled()
-  }, [loadSeats])
+  }, [loadSeats, effectiveReplicaId, router])
 
-  // Gestione successo pagamento (?success=true&session_id=...)
+  // Gestione successo pagamento (?success=true&session_id=...) — double check Stripe (localhost / fallback webhook)
   useEffect(() => {
     const handleSuccess = async () => {
       if (successHandledRef.current) return
@@ -528,146 +577,77 @@ export function TheaterBooking() {
       const isSuccess = params.get("success") === "true"
       if (!isSuccess) return
 
-      successHandledRef.current = true
-
-      // session_id preso rigorosamente dall'URL di ritorno Stripe
       const stripeSessionId = (params.get("session_id") || "").trim()
       if (!stripeSessionId) {
-        alert("Pagamento completato, ma manca session_id nell'URL. Contatta l'assistenza.")
-        successHandledRef.current = false
+        successHandledRef.current = true
+        setIsVerifyingPayment(false)
+        setPaymentVerifyError(
+          "Pagamento completato, ma manca session_id nell'URL. Contatta l'assistenza con i dati del pagamento.",
+        )
         return
       }
 
-      const pendingCheckoutData = safeReadPendingCheckoutData()
-      const pendingReplicaId = pendingCheckoutData?.replicaId
+      successHandledRef.current = true
+      setIsVerifyingPayment(true)
+      setBookingConfirmed(false)
+      setBookingConfirmMessage(null)
+      setPaymentVerifyError(null)
 
-      // 1) Legge righe già salvate per questa sessione
-      const { data: existingBookings, error: checkError } = await supabase
-        .from("prenotazioni")
-        .select("id, posti_prenotati")
-        .eq("stripe_session_id", stripeSessionId)
-        .limit(1000)
+      try {
+        const verifyRes = await fetch(
+          `/api/checkout/verify?session_id=${encodeURIComponent(stripeSessionId)}`,
+          { method: "GET", headers: { Accept: "application/json" } },
+        )
 
-      if (checkError) {
-        logSupabaseError("[prenotazioni anti-duplicato]", checkError)
-        alert("Errore durante il controllo anti-duplicato. Riprova.")
-        successHandledRef.current = false
-        return
-      }
+        let payload: { ok?: boolean; error?: string; warning?: string } = {}
+        try {
+          payload = (await verifyRes.json()) as typeof payload
+        } catch {
+          payload = {}
+        }
 
-      // 2) Insert per posto: una riga prenotazione per ogni singolo seat code
-      if (!pendingCheckoutData) {
-        alert("Pagamento completato, ma dati prenotazione mancanti. Contatta l'assistenza.")
-        successHandledRef.current = false
-        return
-      }
+        const verified = verifyRes.ok && payload.ok !== false
 
-      const seatsToPersist = [...new Set(pendingCheckoutData.seatsCodes.map((seat) => String(seat).trim()).filter(Boolean))]
-      const alreadyPersistedSeatCodes = new Set<string>()
-      ;((existingBookings ?? []) as Array<{ posti_prenotati?: string[] | string | null }>).forEach((row) => {
-        normalizeBookedSeats(row.posti_prenotati).forEach((seatCode) => {
-          alreadyPersistedSeatCodes.add(String(seatCode).toUpperCase())
-        })
-      })
-      const missingSeatCodes = seatsToPersist.filter((seatCode) => !alreadyPersistedSeatCodes.has(seatCode.toUpperCase()))
-
-      if (missingSeatCodes.length > 0) {
-        const rowsToInsert = missingSeatCodes.map((seatCode) => ({
-          replica_id: pendingReplicaId,
-          nome: pendingCheckoutData.customer.nome,
-          cognome: pendingCheckoutData.customer.cognome,
-          email: pendingCheckoutData.customer.email,
-          telefono: pendingCheckoutData.customer.telefono,
-          posti_prenotati: [seatCode],
-          stripe_session_id: stripeSessionId,
-          stato_pagamento: "paid",
-        }))
-
-        const { error: insertError } = await supabase.from("prenotazioni").insert(rowsToInsert)
-
-        if (insertError) {
-          const supaErr = insertError as {
-            message?: string
-            code?: string
-            details?: string
-            hint?: string
-          }
-          console.error("[prenotazioni insert post-pagamento] ERRORE ESATTO SUPABASE", {
-            message: supaErr.message,
-            code: supaErr.code,
-            details: supaErr.details,
-            hint: supaErr.hint,
-            payloadRows: rowsToInsert.length,
-            stripeSessionId,
-            seats: missingSeatCodes,
-          })
-          logSupabaseError("[prenotazioni insert post-pagamento]", insertError)
-          if (supaErr.code === "23505" && String(supaErr.details ?? "").includes("stripe_session_id")) {
-            alert(
-              "Pagamento completato ma salvataggio bloccato: vincolo UNIQUE su stripe_session_id. Rimuovi il vincolo dal DB per permettere una riga per ogni posto."
-            )
-            successHandledRef.current = false
-            return
-          }
-          alert("Pagamento completato, ma salvataggio prenotazione non riuscito. Contatta assistenza.")
+        if (!verified) {
+          const detail = payload.error || `Errore verifica (HTTP ${verifyRes.status})`
+          setIsVerifyingPayment(false)
+          setPaymentVerifyError(
+            `Non siamo riusciti a confermare la prenotazione: ${detail}. Il pagamento potrebbe essere andato a buon fine: controlla la email o contatta l'assistenza indicando l'ID ordine Stripe.`,
+          )
           successHandledRef.current = false
           return
         }
-      }
 
-      // 3) Invio ricevute di prenotazione via email (server-side) + idempotenza
-      if (pendingCheckoutData) {
-        try {
-          const sendRes = await fetch("/api/send-ticket", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify({
-              session_id: stripeSessionId,
-              replica_id: pendingCheckoutData.replicaId,
-              customer: pendingCheckoutData.customer,
-              seats: pendingCheckoutData.seatsCodes,
-            }),
-          })
+        clearPendingStorage()
 
-          if (!sendRes.ok) {
-            const details = await readSendTicketFailureDetails(sendRes)
-            console.error("[send-ticket] risposta non OK", sendRes.status, details)
-            alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
-          } else {
-            const ct = (sendRes.headers.get("content-type") || "").toLowerCase()
-            if (!ct.includes("application/json")) {
-              const preview = await sendRes.text().catch(() => "")
-              console.error("[send-ticket] Content-Type inatteso (OK):", ct, preview.slice(0, 500))
-              alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
-            } else {
-              try {
-                const data = (await sendRes.json()) as { ok?: boolean; alreadySent?: boolean }
-                if (!data?.ok && !data?.alreadySent) {
-                  console.error("[send-ticket] JSON OK ma payload inatteso:", data)
-                  alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
-                }
-              } catch (e) {
-                console.error("[send-ticket] parse JSON fallito dopo OK HTTP:", e)
-                alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
-              }
-            }
-          }
-        } catch (e) {
-          console.error("[send-ticket] fetch o elaborazione fallita:", e)
-          alert(BOOKING_RECEIPT_EMAIL_FALLBACK_ALERT)
+        const replicaIdParam = (params.get("replica_id") || effectiveReplicaId || "").trim()
+        if (replicaIdParam) {
+          router.replace(`/?replica_id=${encodeURIComponent(replicaIdParam)}`, { scroll: false })
+        } else {
+          removeQueryParams(["success", "session_id"])
         }
-      }
+        router.refresh()
 
-      clearPendingStorage()
-      removeQueryParams(["success", "session_id", "replica_id"])
-      router.replace("/spettacoli?prenotazione=completata")
+        setIsVerifyingPayment(false)
+        setBookingConfirmed(true)
+        setBookingConfirmMessage(
+          payload.warning ??
+            "Prenotazione confermata! Riceverai a breve la ricevuta con i PDF in allegato sulla email indicata.",
+        )
+
+        void loadSeats()
+      } catch (e) {
+        console.error("[checkout/verify] fetch fallita:", e)
+        setIsVerifyingPayment(false)
+        setPaymentVerifyError(
+          "Errore di rete durante la conferma dei biglietti. Ricarica la pagina; se il problema persiste, contatta l'assistenza.",
+        )
+        successHandledRef.current = false
+      }
     }
 
     void handleSuccess()
-  }, [loadSeats, router])
+  }, [loadSeats, effectiveReplicaId, router])
 
   // Selezione locale dei posti
   const handleSeatClick = useCallback((seatId: string) => {
@@ -774,11 +754,13 @@ export function TheaterBooking() {
         return
       }
 
+      const fifteenMinutesAgo = pendingHoldCutoffIso()
+
       const { data: statusRows, error: statusError } = await supabase
         .from("prenotazioni")
-        .select("posti_prenotati, stato_pagamento")
+        .select("posti_prenotati, stato_pagamento, created_at")
         .eq("replica_id", selectedReplicaId)
-        .in("stato_pagamento", ["pending", "paid"])
+        .or(prenotazioniAvailabilityOrFilter(fifteenMinutesAgo))
 
       if (statusError) {
         logSupabaseError("[prenotazioni verifica checkout posto unico]", statusError)
@@ -814,11 +796,13 @@ export function TheaterBooking() {
       }
 
       // 1) Verifica disponibilita aggiornata per la replica scelta
+      const fifteenMinutesAgo = pendingHoldCutoffIso()
+
       const { data: statusRows, error: statusError } = await supabase
         .from("prenotazioni")
-        .select("posti_prenotati, stato_pagamento")
+        .select("posti_prenotati, stato_pagamento, created_at")
         .eq("replica_id", selectedReplicaId)
-        .in("stato_pagamento", ["pending", "paid"])
+        .or(prenotazioniAvailabilityOrFilter(fifteenMinutesAgo))
 
       if (statusError) {
         logSupabaseError("[prenotazioni verifica checkout]", statusError)
@@ -826,12 +810,7 @@ export function TheaterBooking() {
         return
       }
 
-      const notFreeSeatCodes = new Set<string>()
-      ;((statusRows ?? []) as PrenotazioneStatusRow[]).forEach((row) => {
-        normalizeBookedSeats(row.posti_prenotati).forEach((seatCode) => {
-          notFreeSeatCodes.add(String(seatCode).toUpperCase())
-        })
-      })
+      const notFreeSeatCodes = collectOccupiedSeatCodes((statusRows ?? []) as PrenotazioneStatusRow[])
 
       const seatsAlreadyTaken = selectedSeatCodes.filter((code) => notFreeSeatCodes.has(code.toUpperCase()))
       if (seatsAlreadyTaken.length > 0) {
@@ -864,6 +843,7 @@ export function TheaterBooking() {
           totalAmount,
           replicaId: selectedReplicaId,
           spettacoloId: selectedSpettacoloId,
+          bookingMode,
           customer: {
             nome,
             cognome,
@@ -953,6 +933,28 @@ export function TheaterBooking() {
   const postoUnicoSoldOutUi =
     !isLoadingSeats && bookingMode === "posto_unico" && (postoUnicoPostiRimanenti <= 0 || teatroCapienzaTotale <= 0)
 
+  const isStripeReturn =
+    searchParams.get("canceled") === "true" || searchParams.get("success") === "true"
+
+  if (!effectiveReplicaId && !isStripeReturn) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
+        <div className="max-w-md rounded-xl border border-border bg-card p-6 text-center">
+          <h1 className="text-lg font-semibold text-foreground">Replica non trovata</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Non è stato possibile identificare la replica da prenotare. Torna alla home per scegliere uno spettacolo.
+          </p>
+          <Link
+            href="/"
+            className="mt-6 inline-flex rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+          >
+            Torna alla home
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-10 border-b border-border bg-card/50 backdrop-blur-sm">
@@ -996,6 +998,36 @@ export function TheaterBooking() {
       </header>
 
       <main className="container mx-auto px-4 py-8">
+        {bookingConfirmed && (
+          <div
+            className="mb-6 rounded-xl border border-primary/30 bg-primary/10 px-4 py-4 md:px-6"
+            role="status"
+          >
+            <h2 className="text-lg font-semibold text-foreground">Prenotazione confermata</h2>
+            <p className="mt-2 text-sm text-muted-foreground">{bookingConfirmMessage}</p>
+            <button
+              type="button"
+              onClick={() => router.push("/spettacoli")}
+              className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+            >
+              Torna agli spettacoli
+            </button>
+          </div>
+        )}
+
+        {loadSeatsError && !isLoadingSeats && (
+          <div className="mb-6 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-4 text-sm text-destructive">
+            {loadSeatsError}
+            <button
+              type="button"
+              onClick={() => void loadSeats()}
+              className="mt-3 block text-sm font-medium underline"
+            >
+              Riprova
+            </button>
+          </div>
+        )}
+
         {isLoadingSeats && (
           <div className="mb-6 rounded-xl border border-border bg-card/50 p-4 text-sm text-muted-foreground">
             Caricamento replica e disponibilità...
@@ -1135,6 +1167,52 @@ export function TheaterBooking() {
           <small className="block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
         </div>
       </footer>
+
+      {cancelToastMessage && (
+        <div
+          className="fixed bottom-6 left-1/2 z-[70] max-w-md -translate-x-1/2 rounded-lg border border-border bg-card px-4 py-3 text-sm shadow-lg"
+          role="status"
+        >
+          {cancelToastMessage}
+        </div>
+      )}
+
+      {isVerifyingPayment && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+          <div
+            className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg"
+            role="dialog"
+            aria-live="polite"
+            aria-busy="true"
+          >
+            <h2 className="text-lg font-semibold text-foreground">Conferma in corso</h2>
+            <p className="mt-3 text-sm text-muted-foreground">Stiamo confermando i tuoi biglietti...</p>
+            <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {paymentVerifyError && !isVerifyingPayment && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-xl border border-destructive/40 bg-card p-6 shadow-lg" role="alert">
+            <h2 className="text-lg font-semibold text-destructive">Conferma non riuscita</h2>
+            <p className="mt-3 text-sm text-muted-foreground">{paymentVerifyError}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setPaymentVerifyError(null)
+                successHandledRef.current = false
+                removeQueryParams(["success", "session_id"])
+              }}
+              className="mt-6 w-full rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted/50"
+            >
+              Chiudi
+            </button>
+          </div>
+        </div>
+      )}
 
       {isDataModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

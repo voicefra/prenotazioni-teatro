@@ -5,6 +5,7 @@ import { useEffect, useState, Suspense, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 import { formatTimeHHmm } from "@/lib/datetime-format"
+import { countBookedTicketsByReplica, pendingHoldCutoffIso, prenotazioniAvailabilityOrFilter } from "@/lib/booking/prenotazioni-utils"
 
 interface ReplicaBase {
   id: number | string
@@ -200,18 +201,19 @@ function SpettacoliContent() {
         }, new Map<string, Replica[]>())
       }
 
-      /** Conteggio prenotazioni pagate per replica (1 riga = 1 posto venduto). */
+      /** Conteggio prenotazioni in corso o pagate per replica (1 riga = 1 posto). */
       const paidCountByReplica = new Map<string, number>()
       const allReplicaIds = [...new Set([...replicheBySpettacolo.values()].flat().map((r) => r.id))]
       if (allReplicaIds.length > 0) {
         const CHUNK = 150
+        const fifteenMinutesAgo = pendingHoldCutoffIso()
         for (let i = 0; i < allReplicaIds.length; i += CHUNK) {
           const chunk = allReplicaIds.slice(i, i + CHUNK)
           const { data: prenData, error: prenError } = await supabase
             .from("prenotazioni")
-            .select("replica_id")
-            .eq("stato_pagamento", "paid")
+            .select("replica_id, posti_prenotati, stato_pagamento, created_at")
             .in("replica_id", chunk)
+            .or(prenotazioniAvailabilityOrFilter(fifteenMinutesAgo))
 
           if (prenError) {
             const supabaseError = prenError
@@ -228,11 +230,17 @@ function SpettacoliContent() {
             setIsLoading(false)
             return
           }
-          for (const row of (prenData ?? []) as { replica_id?: string | number }[]) {
-            const rid = String(row.replica_id ?? "").trim()
-            if (!rid) continue
-            paidCountByReplica.set(rid, (paidCountByReplica.get(rid) ?? 0) + 1)
-          }
+          const chunkCounts = countBookedTicketsByReplica(
+            (prenData ?? []) as {
+              replica_id?: string | number
+              posti_prenotati?: string[] | string | null
+              stato_pagamento?: string | null
+              created_at?: string | null
+            }[],
+          )
+          chunkCounts.forEach((count, rid) => {
+            paidCountByReplica.set(rid, (paidCountByReplica.get(rid) ?? 0) + count)
+          })
         }
       }
 

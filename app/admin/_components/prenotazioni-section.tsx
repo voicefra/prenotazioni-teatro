@@ -67,6 +67,10 @@ export function PrenotazioniSection() {
   const [sortKey, setSortKey] = useState<SortKey>("nome")
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc")
 
+  useEffect(() => {
+    void fetch("/api/cleanup", { method: "GET" }).catch(() => undefined)
+  }, [])
+
   const loadSpettacoli = useCallback(async () => {
     setLoadingSpettacoli(true)
     setError(null)
