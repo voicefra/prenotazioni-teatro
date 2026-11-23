@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
+import { RESERVATION_HOLD_MS } from "@/lib/booking/prenotazioni-utils"
 
 const ALLOWED_TABLES = ["prenotazioni", "posti", "repliche", "spettacoli", "teatri"] as const
 const ORDER: readonly string[] = ["prenotazioni", "posti", "repliche", "spettacoli", "teatri"]
@@ -172,4 +173,46 @@ export async function adminReset(
   const rawT = payload?.truncated
   const listT = Array.isArray(rawT) ? rawT.map((x) => String(x)) : picked
   return { ok: true, mode: "global", truncated: listT }
+}
+
+export type ConfermaPrenotazioneResult = { ok: true } | { ok: false; error: string }
+
+/** Conferma una prenotazione senza pagamento ancora dentro le 48 ore. */
+export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<ConfermaPrenotazioneResult> {
+  const bookingId = String(id ?? "").trim()
+  if (!bookingId) return { ok: false, error: "Prenotazione non valida." }
+
+  const client = getServiceClient()
+  if (!client.ok) return { ok: false, error: client.error }
+  const { supabase } = client
+
+  const { data: row, error: readErr } = await supabase
+    .from("prenotazioni")
+    .select("id, stato_pagamento, created_at")
+    .eq("id", bookingId)
+    .maybeSingle()
+
+  if (readErr) return { ok: false, error: readErr.message }
+  if (!row) return { ok: false, error: "Prenotazione non trovata." }
+
+  const stato = String(row.stato_pagamento ?? "").toLowerCase()
+  if (stato === "confermato") return { ok: true }
+  if (stato !== "riservato") {
+    return { ok: false, error: "Si possono confermare solo le prenotazioni senza pagamento in attesa." }
+  }
+
+  const createdMs = new Date(String(row.created_at ?? "")).getTime()
+  if (!Number.isFinite(createdMs) || Date.now() - createdMs >= RESERVATION_HOLD_MS) {
+    await supabase.from("prenotazioni").delete().eq("id", bookingId).eq("stato_pagamento", "riservato")
+    return { ok: false, error: "Le 48 ore sono scadute: il posto è stato liberato." }
+  }
+
+  const { error: upErr } = await supabase
+    .from("prenotazioni")
+    .update({ stato_pagamento: "confermato" })
+    .eq("id", bookingId)
+    .eq("stato_pagamento", "riservato")
+
+  if (upErr) return { ok: false, error: upErr.message }
+  return { ok: true }
 }

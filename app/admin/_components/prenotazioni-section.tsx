@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { logSupabaseDev } from "./admin-shared"
+import { confermaPrenotazioneSenzaPagamento } from "../actions"
 
 interface SpettacoloOpt {
   id: string
@@ -29,6 +30,7 @@ interface PrenotazioneRow {
   posti_prenotati: unknown
   stato_pagamento: string | null
   stato_ingresso: string | null
+  created_at: string | null
 }
 
 type SortKey = "nome" | "cognome" | "email" | "posti" | "stato_ingresso"
@@ -66,6 +68,7 @@ export function PrenotazioniSection() {
   const [replicaId, setReplicaId] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("nome")
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc")
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
 
   useEffect(() => {
     void fetch("/api/cleanup", { method: "GET" }).catch(() => undefined)
@@ -148,6 +151,7 @@ export function PrenotazioniSection() {
             posti_prenotati: row.posti_prenotati ?? null,
             stato_pagamento: row.stato_pagamento != null ? String(row.stato_pagamento) : null,
             stato_ingresso: row.stato_ingresso != null ? String(row.stato_ingresso) : null,
+            created_at: row.created_at != null ? String(row.created_at) : null,
           } satisfies PrenotazioneRow
         }),
       )
@@ -179,6 +183,26 @@ export function PrenotazioniSection() {
     const or = formatTimeHHmm(r.orario ?? r.data_evento)
     return [de, or].filter(Boolean).join(" · ")
   }, [repliche, replicaId])
+
+  const pagamentoLabel = (raw: string | null): string => {
+    const s = String(raw ?? "").trim().toLowerCase()
+    if (s === "paid") return "Pagata"
+    if (s === "pending") return "Pagamento in corso"
+    if (s === "riservato") return "In attesa di conferma"
+    if (s === "confermato") return "Confermata (senza pagamento)"
+    return raw?.trim() || "—"
+  }
+
+  const confermaPrenotazione = async (id: string) => {
+    setConfirmingId(id)
+    setError(null)
+    const result = await confermaPrenotazioneSenzaPagamento(id)
+    setConfirmingId(null)
+    if (!result.ok) {
+      setError(result.error)
+    }
+    if (replicaId) await loadPrenotazioni(replicaId)
+  }
 
   const ingressoLabel = (raw: string | null): string => {
     const s = String(raw ?? "")
@@ -384,7 +408,8 @@ export function PrenotazioniSection() {
                           Posti{sortArrow("posti")}
                         </button>
                       </th>
-                      <th className="px-3 py-2 font-medium">Stato pagamento</th>
+                      <th className="px-3 py-2 font-medium">Stato</th>
+                      <th className="px-3 py-2 font-medium print:hidden">Azioni</th>
                       <th className="px-3 py-2 font-medium">
                         <button
                           type="button"
@@ -404,7 +429,21 @@ export function PrenotazioniSection() {
                         <td className="px-3 py-2 break-all">{p.email ?? "—"}</td>
                         <td className="px-3 py-2">{p.telefono ?? "—"}</td>
                         <td className="px-3 py-2 text-xs">{formatPosti(p.posti_prenotati)}</td>
-                        <td className="px-3 py-2">{p.stato_pagamento ?? "—"}</td>
+                        <td className="px-3 py-2">{pagamentoLabel(p.stato_pagamento)}</td>
+                        <td className="px-3 py-2 print:hidden">
+                          {String(p.stato_pagamento ?? "").toLowerCase() === "riservato" ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={confirmingId === String(p.id)}
+                              onClick={() => void confermaPrenotazione(String(p.id))}
+                            >
+                              {confirmingId === String(p.id) ? "Conferma…" : "Conferma"}
+                            </Button>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                         <td className="px-3 py-2">{ingressoLabel(p.stato_ingresso)}</td>
                       </tr>
                     ))}

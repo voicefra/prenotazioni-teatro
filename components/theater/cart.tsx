@@ -24,6 +24,8 @@ interface CartProps {
   selectedSeats: SelectedSeat[]
   onRemoveSeat: (seatId: string) => void
   onCheckout: () => void
+  /** Testo del pulsante principale. Default: pagamento online. */
+  submitLabel?: string
   /** Diritti di prenotazione (€) per posto — da tabella spettacoli */
   dirittiPrevenditaPerSeat: number
 }
@@ -38,6 +40,7 @@ export function Cart({
   selectedSeats,
   onRemoveSeat,
   onCheckout,
+  submitLabel = "Procedi al Pagamento",
   dirittiPrevenditaPerSeat,
 }: CartProps) {
   const isPostoUnico = bookingMode === "posto_unico"
@@ -188,7 +191,7 @@ export function Cart({
           disabled={isPostoUnico ? postoUnicoSoldOut || postoUnicoMax <= 0 || qty < 1 : selectedSeats.length === 0}
           onClick={onCheckout}
         >
-          Procedi al Pagamento
+          {submitLabel}
         </Button>
       </CardFooter>
     </Card>

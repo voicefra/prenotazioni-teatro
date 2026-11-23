@@ -10,16 +10,25 @@ export type DeliverBookingReceiptResult =
   | { ok: true; alreadySent?: boolean; ticketIds: string[]; messageId?: string | null; warning?: string }
   | { ok: false; error: string; code: string }
 
-function parseSeatCode(code: string): TicketSeat | null {
+function parseSeatCode(code: string): TicketSeat {
   const trimmed = code.trim()
   const upper = trimmed.toUpperCase()
   if (upper.startsWith("UNICO")) {
-    const suffix = trimmed.replace(/^unico[-_]?/i, "").trim() || trimmed
-    return { fila: "Posto unico", posto: suffix.slice(0, 24) }
+    return { fila: "Posto unico", posto: trimmed.replace(/^UNICO-/i, "").replace(/^unico[-_]?/i, "").trim() || trimmed }
   }
-  const m = trimmed.match(/^([A-Za-z]+)[-\s]?(\d+)$/)
-  if (!m) return null
-  return { fila: m[1].toUpperCase(), posto: m[2] }
+  const match = trimmed.match(/^([a-zA-Z]+)(\d+)$/)
+  if (match) {
+    return { fila: match[1].toUpperCase(), posto: match[2] }
+  }
+  return { fila: "Generale", posto: trimmed }
+}
+
+function formatOrderDateItRome(date: Date): string {
+  return date.toLocaleString("it-IT", {
+    timeZone: "Europe/Rome",
+    dateStyle: "short",
+    timeStyle: "short",
+  })
 }
 
 function formatDataEventoItDateOnly(raw: unknown): string {
@@ -28,6 +37,7 @@ function formatDataEventoItDateOnly(raw: unknown): string {
   const d = new Date(s)
   if (Number.isNaN(d.getTime())) return s
   const formatted = d.toLocaleDateString("it-IT", {
+    timeZone: "Europe/Rome",
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -35,6 +45,21 @@ function formatDataEventoItDateOnly(raw: unknown): string {
   })
   if (!formatted) return s
   return formatted.charAt(0).toUpperCase() + formatted.slice(1)
+}
+
+function formatTimeHHmmRome(value: unknown): string {
+  const base = formatTimeHHmm(value)
+  if (!base) return ""
+  const s = String(value ?? "").trim()
+  if (/^\d{1,2}:\d{2}/.test(s)) return base
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return base
+  return d.toLocaleTimeString("it-IT", {
+    timeZone: "Europe/Rome",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
 }
 
 type BookingSeatRow = {
@@ -129,6 +154,76 @@ export async function deliverBookingReceiptForStripeSession(
     return { ok: false, error: "Nessuna prenotazione pagata per questa sessione Stripe.", code: "BOOKING_MISSING" }
   }
 
+  const orderDate = sessionForTotals?.created
+    ? formatOrderDateItRome(new Date(sessionForTotals.created * 1000))
+    : formatOrderDateItRome(new Date())
+  const orderId = String(sessionForTotals?.id ?? sessionId)
+  const totalEur = sessionForTotals?.amount_total != null ? Number(sessionForTotals.amount_total) / 100 : 0
+
+  return sendReceiptForRows(supabase, rows, {
+    orderDate,
+    orderId,
+    totalEur,
+    reservationHold: false,
+    resendKey,
+    from,
+  })
+}
+
+/** Email e PDF per prenotazioni senza pagamento (`stato_pagamento = riservato`). */
+export async function deliverBookingReceiptForReservation(
+  supabase: SupabaseClient,
+  bookingIds: string[],
+): Promise<DeliverBookingReceiptResult> {
+  const resendKey = process.env.RESEND_API_KEY
+  const from = process.env.RESEND_FROM
+  if (!resendKey || !from) {
+    return { ok: false, error: "Configurazione email mancante: RESEND_API_KEY e RESEND_FROM.", code: "MISSING_RESEND" }
+  }
+
+  const ids = [...new Set(bookingIds.map((id) => String(id).trim()).filter(Boolean))]
+  if (ids.length === 0) {
+    return { ok: false, error: "Nessuna prenotazione da inviare.", code: "BOOKING_MISSING" }
+  }
+
+  const { data: reservedRows, error: bookErr } = await supabase
+    .from("prenotazioni")
+    .select("id, tickets_sent_at, posti_prenotati, nome, cognome, email, telefono, replica_id")
+    .in("id", ids)
+    .eq("stato_pagamento", "riservato")
+    .order("created_at", { ascending: true })
+
+  if (bookErr) {
+    return { ok: false, error: bookErr.message, code: "BOOKING_LOOKUP" }
+  }
+
+  const rows = (reservedRows ?? []) as BookingSeatRow[]
+  if (rows.length === 0) {
+    return { ok: false, error: "Nessuna prenotazione senza pagamento da inviare.", code: "BOOKING_MISSING" }
+  }
+
+  return sendReceiptForRows(supabase, rows, {
+    orderDate: formatOrderDateItRome(new Date()),
+    orderId: String(rows[0]?.id ?? ""),
+    totalEur: 0,
+    reservationHold: true,
+    resendKey,
+    from,
+  })
+}
+
+async function sendReceiptForRows(
+  supabase: SupabaseClient,
+  rows: BookingSeatRow[],
+  meta: {
+    orderDate: string
+    orderId: string
+    totalEur: number
+    reservationHold: boolean
+    resendKey: string
+    from: string
+  },
+): Promise<DeliverBookingReceiptResult> {
   const first = rows[0]
   const replicaId = String(first.replica_id ?? "").trim()
   const nome = String(first.nome ?? "").trim()
@@ -138,24 +233,6 @@ export async function deliverBookingReceiptForStripeSession(
   if (!replicaId || !email || !nome || !cognome) {
     return { ok: false, error: "Dati prenotazione incompleti (replica o anagrafica).", code: "BAD_BOOKING_ROW" }
   }
-
-  const orderDate = sessionForTotals?.created
-    ? new Date(sessionForTotals.created * 1000).toLocaleString("it-IT", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : new Date().toLocaleString("it-IT", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-  const orderId = String(sessionForTotals?.id ?? sessionId)
-  const totalEur = sessionForTotals?.amount_total != null ? Number(sessionForTotals.amount_total) / 100 : 0
 
   const { data: repRow, error: repErr } = await supabase
     .from("repliche")
@@ -198,7 +275,7 @@ export async function deliverBookingReceiptForStripeSession(
   }
 
   const dataLabel = formatDataEventoItDateOnly(repRow.data_evento)
-  const orarioLabel = formatTimeHHmm(repRow.orario ?? repRow.data_evento) || ""
+  const orarioLabel = formatTimeHHmmRome(repRow.orario ?? repRow.data_evento) || ""
 
   const bookingsBySeat = new Map<string, { id: string; ticketsSentAt: string | null; seat: string }>()
   for (const row of rows) {
@@ -235,7 +312,6 @@ export async function deliverBookingReceiptForStripeSession(
   for (const item of bookedSeats) {
     if (item.alreadySent) continue
     const seatObj = parseSeatCode(item.seat)
-    if (!seatObj) continue
 
     const ticketScanUrl = buildTicketScanUrl(item.bookingId)
     const safeFileSlug = `${seatObj.fila}-${seatObj.posto}`.replace(/[^a-zA-Z0-9-_]+/g, "-").slice(0, 80)
@@ -270,15 +346,28 @@ export async function deliverBookingReceiptForStripeSession(
     return { ok: true, alreadySent: true, ticketIds: bookedSeats.map((item) => item.bookingId) }
   }
 
-  const resend = new Resend(resendKey)
-  const senderFrom = formatSenderFromAddress(from)
+  const resend = new Resend(meta.resendKey)
+  const senderFrom = formatSenderFromAddress(meta.from)
+  const orderDate = meta.orderDate
+  const orderId = meta.orderId
+  const totalEur = meta.reservationHold
+    ? (prezzoPrenotazione + dirittiPrenotazione) * uniqueRequestedSeats.length
+    : meta.totalEur
+  const totaleLabel = meta.reservationHold ? "Totale prenotazione" : "Totale Pagato"
+  const holdNote = meta.reservationHold
+    ? `<p style="margin:0 0 18px 0;">Questa prenotazione non include il pagamento online. Il posto resta riservato per <strong>48 ore</strong>. Se l'organizzatore non la conferma entro quel termine, il posto torna libero.</p>`
+    : ""
+  const mailSubject = meta.reservationHold
+    ? `Conferma prenotazione – ${spettacoloNome}`
+    : `Ricevuta di Prenotazione – ${spettacoloNome}`
   const seatRowsHtml = uniqueRequestedSeats
     .map((seatCode) => {
       const parsed = parseSeatCode(seatCode)
-      const fila = parsed?.fila ?? "—"
+      const fila = parsed.fila
+      const posto = parsed.posto
       return `
           <tr>
-            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(seatCode)}</td>
+            <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(posto)}</td>
             <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(fila)}</td>
             <td style="padding:8px;border-bottom:1px solid #e5e7eb;">€ ${prezzoPrenotazione.toFixed(2)}</td>
           </tr>
@@ -293,12 +382,13 @@ export async function deliverBookingReceiptForStripeSession(
           <h2 style="margin:0 0 10px 0;font-size:24px;color:#0f172a;">Conferma ordine e ricevuta di prenotazione</h2>
           <p style="margin:0 0 14px 0;">Gentile <strong>${escapeHtml(nome)} ${escapeHtml(cognome)}</strong>,</p>
           <p style="margin:0 0 18px 0;">Grazie per la tua prenotazione. In allegato trovi la ricevuta di prenotazione PDF con QR code individuale.</p>
+          ${holdNote}
 
           <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#f8fafc;margin-bottom:14px;">
             <div style="font-size:18px;font-weight:700;margin-bottom:8px;">Spettacolo: <span style="color:#0b63f6;">${escapeHtml(spettacoloNome)}</span></div>
             <div><strong style="font-size:15px;">ID Ordine:</strong> <strong style="font-size:16px;">${escapeHtml(orderId)}</strong></div>
             <div><strong>Data Ordine:</strong> ${escapeHtml(orderDate)}</div>
-            <div><strong style="font-size:15px;">Totale Pagato:</strong> <strong style="font-size:18px;color:#0b63f6;">€ ${totalEur.toFixed(2)}</strong></div>
+            <div><strong style="font-size:15px;">${totaleLabel}:</strong> <strong style="font-size:18px;color:#0b63f6;">€ ${totalEur.toFixed(2)}</strong></div>
           </div>
 
           <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:14px;">
@@ -347,7 +437,7 @@ export async function deliverBookingReceiptForStripeSession(
   const mail = await resend.emails.send({
     from: senderFrom,
     to: email,
-    subject: `Ricevuta di Prenotazione – ${spettacoloNome}`,
+    subject: mailSubject,
     html,
     attachments,
   })

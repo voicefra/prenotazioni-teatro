@@ -122,12 +122,20 @@ export async function POST(request: Request) {
     const spettacoloId = String(replicaRow.spettacolo_id ?? safeSpettacoloId).trim()
     const { data: spettacoloRow, error: spettacoloErr } = await supabase
       .from("spettacoli")
-      .select("modalita_prenotazione, teatro_id, prezzo_biglietto, diritti_prevendita")
+      .select("modalita_prenotazione, modalita_pagamento, teatro_id, prezzo_biglietto, diritti_prevendita")
       .eq("id", spettacoloId)
       .maybeSingle()
 
     if (spettacoloErr || !spettacoloRow) {
       return NextResponse.json({ error: "Spettacolo non trovato." }, { status: 400 })
+    }
+
+    const modalitaPagamento = String(spettacoloRow.modalita_pagamento ?? "pagamento_online").trim()
+    if (modalitaPagamento === "solo_prenotazione") {
+      return NextResponse.json(
+        { error: "Questo spettacolo accetta solo la prenotazione, senza pagamento online." },
+        { status: 400 },
+      )
     }
 
     const modalitaDb = String(spettacoloRow.modalita_prenotazione ?? "posti_assegnati").trim()

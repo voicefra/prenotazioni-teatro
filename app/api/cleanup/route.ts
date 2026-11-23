@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
-import { pendingHoldCutoffIso } from "@/lib/booking/prenotazioni-utils"
+import { pendingHoldCutoffIso, reservationHoldCutoffIso } from "@/lib/booking/prenotazioni-utils"
 
 export const runtime = "nodejs"
 
@@ -31,9 +31,23 @@ export async function GET() {
       return NextResponse.json({ deleted: false, error: error.message }, { status: 500 })
     }
 
+    const reservationLimit = reservationHoldCutoffIso()
+    const { data: expiredReservations, error: reservationError } = await supabase
+      .from("prenotazioni")
+      .delete()
+      .eq("stato_pagamento", "riservato")
+      .lt("created_at", reservationLimit)
+      .select("id")
+
+    if (reservationError) {
+      console.error("[cleanup] delete riservato scadute fallito:", reservationError.message)
+      return NextResponse.json({ deleted: false, error: reservationError.message }, { status: 500 })
+    }
+
     return NextResponse.json({
       deleted: true,
       removedCount: (data ?? []).length,
+      removedReservations: (expiredReservations ?? []).length,
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Errore sconosciuto"

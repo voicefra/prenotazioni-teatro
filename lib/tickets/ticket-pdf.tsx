@@ -224,7 +224,7 @@ function TicketPage({
               <Text style={styles.colPrev}>Prev.</Text>
             </View>
             <View style={styles.tableRow}>
-              <Text style={styles.colSeat}>{seat.fila + seat.posto}</Text>
+              <Text style={styles.colSeat}>{seat.posto}</Text>
               <Text style={styles.colRow}>{seat.fila}</Text>
               <Text style={styles.colPrice}>€ {(prezzoBiglietto ?? 0).toFixed(2)}</Text>
               <Text style={styles.colPrev}>€ {(dirittiPrevendita ?? 0).toFixed(2)}</Text>

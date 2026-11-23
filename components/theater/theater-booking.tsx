@@ -52,6 +52,7 @@ interface SpettacoloHeaderRow {
   prezzo_biglietto?: number | null
   diritti_prevendita?: number | null
   modalita_prenotazione?: string | null
+  modalita_pagamento?: string | null
 }
 
 interface TeatroInfoRow {
@@ -246,6 +247,8 @@ export function TheaterBooking() {
   const [prezzoBigliettoEur, setPrezzoBigliettoEur] = useState(15)
   const [dirittiPrevenditaEur, setDirittiPrevenditaEur] = useState(2)
   const [bookingMode, setBookingMode] = useState<CartBookingMode>("posti_assegnati")
+  /** true se lo spettacolo è "solo prenotazione" (nessun pagamento online). */
+  const [isSoloPrenotazione, setIsSoloPrenotazione] = useState(false)
   const [postoUnicoQuantity, setPostoUnicoQuantity] = useState(1)
   const [postoUnicoPostiRimanenti, setPostoUnicoPostiRimanenti] = useState(0)
   const [teatroCapienzaTotale, setTeatroCapienzaTotale] = useState(0)
@@ -321,7 +324,7 @@ export function TheaterBooking() {
 
       const { data: spettacoloRow, error: spettacoloErr } = await supabase
         .from("spettacoli")
-        .select("teatro_id, nome_spettacolo, ente_organizzatore, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione")
+        .select("teatro_id, nome_spettacolo, ente_organizzatore, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione, modalita_pagamento")
         .eq("id", spettacoloId)
         .maybeSingle()
 
@@ -380,6 +383,7 @@ export function TheaterBooking() {
       const modalitaRaw = String(show?.modalita_prenotazione ?? "posti_assegnati").trim()
       const isPostoUnico = modalitaRaw === "posto_unico"
       setBookingMode(isPostoUnico ? "posto_unico" : "posti_assegnati")
+      setIsSoloPrenotazione(String(show?.modalita_pagamento ?? "pagamento_online").trim() === "solo_prenotazione")
 
       const holdCutoff = pendingHoldCutoffIso()
 
@@ -822,6 +826,50 @@ export function TheaterBooking() {
 
     setIsSubmittingBooking(true)
 
+    if (isSoloPrenotazione) {
+      // Solo prenotazione: nessun pagamento, il server salva i posti come "riservato" e invia l'email.
+      try {
+        const res = await fetch("/api/prenota", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            seats: selectedSeatCodes,
+            replicaId: selectedReplicaId,
+            spettacoloId: selectedSpettacoloId,
+            bookingMode,
+            customer: { nome, cognome, email, telefono },
+          }),
+        })
+
+        if (!res.ok) {
+          let errorMsg = "Errore durante la prenotazione. Riprova."
+          try {
+            const errJson = await res.json()
+            if (errJson?.error) errorMsg = String(errJson.error)
+          } catch {
+            // ignore
+          }
+          await loadSeats()
+          alert(errorMsg)
+          return
+        }
+
+        setIsDataModalOpen(false)
+        setFormData(initialFormData)
+        setBookingConfirmMessage(
+          "Prenotazione registrata! Ti abbiamo inviato una email con il riepilogo e il PDF. Il posto resta riservato per 48 ore in attesa della conferma dell'organizzatore.",
+        )
+        setBookingConfirmed(true)
+        window.scrollTo({ top: 0, behavior: "smooth" })
+        await loadSeats()
+      } catch {
+        alert("Errore di rete durante la prenotazione. Riprova.")
+      } finally {
+        setIsSubmittingBooking(false)
+      }
+      return
+    }
+
     try {
       // 2) Salva stato temporaneo nel browser (NO insert prenotazioni qui)
       const pendingData: PendingCheckoutData = {
@@ -894,6 +942,7 @@ export function TheaterBooking() {
     postoUnicoQuantity,
     teatroCapienzaTotale,
     prezzoBigliettoEur,
+    isSoloPrenotazione,
   ])
 
   const handleClearCart = useCallback(async () => {
@@ -1081,7 +1130,7 @@ export function TheaterBooking() {
                   <p className="font-semibold text-foreground">Prenotazione a posto unico</p>
                   <p className="text-muted-foreground">
                     Non è prevista la scelta del numero di posto in sala. Indica nel riepilogo a destra quanti posti
-                    desideri, poi usa &quot;Procedi al pagamento&quot;.
+                    desideri, poi usa &quot;{isSoloPrenotazione ? "Prenota" : "Procedi al pagamento"}&quot;.
                   </p>
                   <p>
                     <span className="font-medium">Capienza teatro:</span>{" "}
@@ -1145,6 +1194,7 @@ export function TheaterBooking() {
                 selectedSeats={selectedSeats}
                 onRemoveSeat={handleRemoveSeat}
                 onCheckout={handleCheckout}
+                submitLabel={isSoloPrenotazione ? "Prenota" : "Procedi al Pagamento"}
                 dirittiPrevenditaPerSeat={dirittiPrevenditaEur}
               />
 

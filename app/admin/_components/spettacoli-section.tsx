@@ -15,10 +15,11 @@ import {
 import type { TeatroRow } from "./teatri-section"
 
 const SPETTACOLI_SELECT =
-  "id, nome_spettacolo, ente_organizzatore, teatro_id, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione" as const
+  "id, nome_spettacolo, ente_organizzatore, teatro_id, locandina_url, prezzo_biglietto, diritti_prevendita, modalita_prenotazione, modalita_pagamento" as const
 const TEATRI_SELECT = "id, nome_teatro, numero_file, posti_per_fila" as const
 
 type ModalitaPrenotazione = "posti_assegnati" | "posto_unico"
+type ModalitaPagamento = "pagamento_online" | "solo_prenotazione"
 
 interface SpettacoloRow {
   id: string
@@ -29,6 +30,7 @@ interface SpettacoloRow {
   prezzo_biglietto: number | null
   diritti_prevendita: number | null
   modalita_prenotazione: ModalitaPrenotazione | null
+  modalita_pagamento: ModalitaPagamento | null
 }
 
 export function SpettacoliSection() {
@@ -45,6 +47,7 @@ export function SpettacoliSection() {
   const [prezzo, setPrezzo] = useState("15")
   const [diritti, setDiritti] = useState("2")
   const [modalitaPrenotazione, setModalitaPrenotazione] = useState<ModalitaPrenotazione>("posti_assegnati")
+  const [modalitaPagamento, setModalitaPagamento] = useState<ModalitaPagamento>("pagamento_online")
   const [locandinaUrl, setLocandinaUrl] = useState<string | null>(null)
   const [locandinaUploading, setLocandinaUploading] = useState(false)
   const [locandinaPath, setLocandinaPath] = useState<string | null>(null)
@@ -92,6 +95,7 @@ export function SpettacoliSection() {
     setPrezzo("15")
     setDiritti("2")
     setModalitaPrenotazione("posti_assegnati")
+    setModalitaPagamento("pagamento_online")
     setLocandinaUrl(null)
     setLocandinaPath(null)
     if (fileRef.current) fileRef.current.value = ""
@@ -105,6 +109,7 @@ export function SpettacoliSection() {
     setPrezzo(String(row.prezzo_biglietto ?? 15))
     setDiritti(String(row.diritti_prevendita ?? 2))
     setModalitaPrenotazione(row.modalita_prenotazione === "posto_unico" ? "posto_unico" : "posti_assegnati")
+    setModalitaPagamento(row.modalita_pagamento === "solo_prenotazione" ? "solo_prenotazione" : "pagamento_online")
     setLocandinaUrl(row.locandina_url)
     setLocandinaPath(null)
     if (fileRef.current) fileRef.current.value = ""
@@ -196,6 +201,7 @@ export function SpettacoliSection() {
       prezzo_biglietto: p,
       diritti_prevendita: d,
       modalita_prenotazione: modalitaPrenotazione,
+      modalita_pagamento: modalitaPagamento,
     }
 
     if (editingId) {
@@ -375,6 +381,40 @@ export function SpettacoliSection() {
                   </p>
                 )}
               </fieldset>
+              <fieldset className="space-y-2 rounded-md border border-border p-3">
+                <legend className="px-1 text-sm font-medium">Pagamento</legend>
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="modalita-pagamento"
+                    className="mt-1"
+                    checked={modalitaPagamento === "pagamento_online"}
+                    onChange={() => setModalitaPagamento("pagamento_online")}
+                  />
+                  <span>
+                    <span className="font-medium">Pagamento online</span>
+                    <span className="block text-muted-foreground text-xs">
+                      L&apos;utente vede &quot;Procedi al pagamento&quot; e paga con Stripe.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="modalita-pagamento"
+                    className="mt-1"
+                    checked={modalitaPagamento === "solo_prenotazione"}
+                    onChange={() => setModalitaPagamento("solo_prenotazione")}
+                  />
+                  <span>
+                    <span className="font-medium">Solo prenotazione</span>
+                    <span className="block text-muted-foreground text-xs">
+                      Nessun pagamento. Parte subito l&apos;email di conferma. Il posto resta bloccato 48 ore: se non lo
+                      confermi da Prenotazioni, torna libero.
+                    </span>
+                  </span>
+                </label>
+              </fieldset>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label htmlFor="s-prezzo" className="mb-1 block text-sm font-medium">
@@ -477,7 +517,8 @@ export function SpettacoliSection() {
                       <p className="font-medium text-foreground">{row.nome_spettacolo}</p>
                       <p className="text-muted-foreground">
                         Teatro: {teatroLabel(row.teatro_id)} ·{" "}
-                        {row.modalita_prenotazione === "posto_unico" ? "Posto unico" : "Posti assegnati"} · €
+                        {row.modalita_prenotazione === "posto_unico" ? "Posto unico" : "Posti assegnati"} ·{" "}
+                        {row.modalita_pagamento === "solo_prenotazione" ? "Solo prenotazione" : "Pagamento online"} · €
                         {Number(row.prezzo_biglietto ?? 0).toFixed(2)} + €{Number(row.diritti_prevendita ?? 0).toFixed(2)}{" "}
                         prev.
                       </p>

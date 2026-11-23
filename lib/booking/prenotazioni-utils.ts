@@ -1,6 +1,9 @@
 /** Durata blocco posti in stato `pending` (checkout non completato). */
 export const PENDING_HOLD_MS = 7 * 60 * 1000
 
+/** Prenotazione senza pagamento: il posto resta occupato 48 ore, poi torna libero se l'admin non conferma. */
+export const RESERVATION_HOLD_MS = 48 * 60 * 60 * 1000
+
 export type PrenotazioneAvailabilityRow = {
   posti_prenotati: string[] | string | null
   stato_pagamento?: string | null
@@ -19,28 +22,47 @@ export function pendingHoldCutoffIso(nowMs = Date.now()): string {
   return new Date(nowMs - PENDING_HOLD_MS).toISOString()
 }
 
-/**
- * Filtro PostgREST equivalente a:
- * (stato_pagamento = 'paid') OR (stato_pagamento = 'pending' AND created_at >= cutoff)
- */
-export function prenotazioniAvailabilityOrFilter(cutoffIso?: string): string {
-  const cutoff = cutoffIso ?? pendingHoldCutoffIso()
-  return `stato_pagamento.eq.paid,and(stato_pagamento.eq.pending,created_at.gte."${cutoff}")`
+export function reservationHoldCutoffIso(nowMs = Date.now()): string {
+  return new Date(nowMs - RESERVATION_HOLD_MS).toISOString()
 }
 
-/** `pending` conta come occupato solo entro i 7 minuti da `created_at`; `paid` sempre. */
-export function rowCountsForAvailability(row: PrenotazioneAvailabilityRow, nowMs = Date.now()): boolean {
-  const stato = String(row.stato_pagamento ?? "").toLowerCase()
-  if (stato === "paid") return true
-  if (stato !== "pending") return false
+/**
+ * Filtro PostgREST:
+ * paid o confermato sempre;
+ * pending solo entro 7 minuti;
+ * riservato (prenotazione senza pagamento) solo entro 48 ore.
+ * Il primo argomento storico (cutoff ISO) viene ignorato: i due limiti si calcolano da ora.
+ */
+export function prenotazioniAvailabilityOrFilter(nowOrLegacyCutoff?: number | string): string {
+  const nowMs =
+    typeof nowOrLegacyCutoff === "number" && Number.isFinite(nowOrLegacyCutoff)
+      ? nowOrLegacyCutoff
+      : Date.now()
+  const pendingCutoff = pendingHoldCutoffIso(nowMs)
+  const reservationCutoff = reservationHoldCutoffIso(nowMs)
+  return [
+    "stato_pagamento.eq.paid",
+    "stato_pagamento.eq.confermato",
+    `and(stato_pagamento.eq.pending,created_at.gte."${pendingCutoff}")`,
+    `and(stato_pagamento.eq.riservato,created_at.gte."${reservationCutoff}")`,
+  ].join(",")
+}
 
+function createdWithin(row: PrenotazioneAvailabilityRow, windowMs: number, nowMs: number): boolean {
   const createdRaw = row.created_at
   if (!createdRaw) return false
-
   const createdMs = new Date(createdRaw).getTime()
   if (Number.isNaN(createdMs)) return false
+  return nowMs - createdMs < windowMs
+}
 
-  return nowMs - createdMs < PENDING_HOLD_MS
+/** `paid` e `confermato` occupano sempre il posto. `pending` per 7 minuti, `riservato` per 48 ore. */
+export function rowCountsForAvailability(row: PrenotazioneAvailabilityRow, nowMs = Date.now()): boolean {
+  const stato = String(row.stato_pagamento ?? "").toLowerCase()
+  if (stato === "paid" || stato === "confermato") return true
+  if (stato === "pending") return createdWithin(row, PENDING_HOLD_MS, nowMs)
+  if (stato === "riservato") return createdWithin(row, RESERVATION_HOLD_MS, nowMs)
+  return false
 }
 
 export function filterRowsForAvailability(rows: PrenotazioneAvailabilityRow[]): PrenotazioneAvailabilityRow[] {

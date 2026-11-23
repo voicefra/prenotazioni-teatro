@@ -67,8 +67,15 @@ export async function processTicketScan(ticketIdRaw: string): Promise<ScanProces
   }
 
   const stato = String(pren.stato_pagamento ?? "").toLowerCase()
-  if (stato !== "paid") {
-    return { ok: false, reason: "not_paid", message: "Questa prenotazione non risulta pagata." }
+  if (stato === "riservato") {
+    return {
+      ok: false,
+      reason: "not_paid",
+      message: "Prenotazione non ancora confermata dall'organizzatore.",
+    }
+  }
+  if (stato !== "paid" && stato !== "confermato") {
+    return { ok: false, reason: "not_paid", message: "Questa prenotazione non risulta confermata." }
   }
 
   const orarioScansione = new Date().toISOString()
