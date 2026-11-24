@@ -409,7 +409,8 @@ export function SpettacoliSection() {
                   <span>
                     <span className="font-medium">Solo prenotazione</span>
                     <span className="block text-muted-foreground text-xs">
-                      Nessun pagamento. Parte subito l&apos;email di conferma. Il posto resta bloccato 48 ore: se non lo
+                      Nessun pagamento online. Parte subito l&apos;email di conferma. Il posto resta bloccato 48 ore, entro cui
+                      il cliente deve ritirare e pagare il biglietto SIAE: se non lo
                       confermi da Prenotazioni, torna libero.
                     </span>
                   </span>

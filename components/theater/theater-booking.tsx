@@ -857,7 +857,7 @@ export function TheaterBooking() {
         setIsDataModalOpen(false)
         setFormData(initialFormData)
         setBookingConfirmMessage(
-          "Prenotazione registrata! Ti abbiamo inviato una email con il riepilogo e il PDF. Il posto resta riservato per 48 ore in attesa della conferma dell'organizzatore.",
+          "Ti abbiamo inviato una email con il riepilogo e il PDF. Attenzione: il posto è riservato solo per 48 ore. Entro questo termine devi ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE: solo così la prenotazione sarà confermata. Trascorse le 48 ore senza pagamento, il posto torna libero. Non è possibile prenotare ora e pagare al botteghino il giorno dello spettacolo.",
         )
         setBookingConfirmed(true)
         window.scrollTo({ top: 0, behavior: "smooth" })
@@ -1052,7 +1052,9 @@ export function TheaterBooking() {
             className="mb-6 rounded-xl border border-primary/30 bg-primary/10 px-4 py-4 md:px-6"
             role="status"
           >
-            <h2 className="text-lg font-semibold text-foreground">Prenotazione confermata</h2>
+            <h2 className="text-lg font-semibold text-foreground">
+              {isSoloPrenotazione ? "Prenotazione registrata (da completare entro 48 ore)" : "Prenotazione confermata"}
+            </h2>
             <p className="mt-2 text-sm text-muted-foreground">{bookingConfirmMessage}</p>
             <button
               type="button"

@@ -355,7 +355,7 @@ async function sendReceiptForRows(
     : meta.totalEur
   const totaleLabel = meta.reservationHold ? "Totale prenotazione" : "Totale Pagato"
   const holdNote = meta.reservationHold
-    ? `<p style="margin:0 0 18px 0;">Questa prenotazione non include il pagamento online. Il posto resta riservato per <strong>48 ore</strong>. Se l'organizzatore non la conferma entro quel termine, il posto torna libero.</p>`
+    ? `<p style="margin:0 0 18px 0;">Questa prenotazione non include il pagamento online. Il posto è riservato per <strong>48 ore</strong> dal momento della prenotazione. Entro questo termine devi <strong>ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE</strong>: solo dopo il pagamento la prenotazione sarà confermata. Trascorse le 48 ore senza pagamento, la prenotazione viene annullata e il posto torna libero. <strong>Non è possibile pagare al botteghino il giorno dello spettacolo.</strong></p>`
     : ""
   const mailSubject = meta.reservationHold
     ? `Conferma prenotazione – ${spettacoloNome}`
