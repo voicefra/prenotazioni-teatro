@@ -189,7 +189,7 @@ export function PrenotazioniSection() {
     if (s === "paid") return "Pagata"
     if (s === "pending") return "Pagamento in corso"
     if (s === "riservato") return "In attesa di conferma"
-    if (s === "confermato") return "Confermata (senza pagamento)"
+    if (s === "confermato") return "Confermata"
     return raw?.trim() || "—"
   }
 

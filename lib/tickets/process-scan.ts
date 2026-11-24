@@ -30,8 +30,16 @@ export type ScanProcessResult =
       cognome: string
       spettacolo: string
       orarioScansione: string
-      /** Ultime scansioni da `public.scansioni` (stesso ticket_id) */
-      scansioni: ScansioneRow[]
+    }
+  | {
+      ok: false
+      reason: "already_scanned"
+      message: string
+      nome: string
+      cognome: string
+      spettacolo: string
+      /** Orario del primo (e unico valido) ingresso */
+      primoIngresso: string
     }
   | { ok: false; reason: "invalid_id" | "not_found" | "not_paid" | "server" | "config"; message: string }
 
@@ -78,38 +86,6 @@ export async function processTicketScan(ticketIdRaw: string): Promise<ScanProces
     return { ok: false, reason: "not_paid", message: "Questa prenotazione non risulta confermata." }
   }
 
-  const orarioScansione = new Date().toISOString()
-
-  const { data: insertedScan, error: insErr } = await supabase
-    .schema("public")
-    .from("scansioni")
-    .insert({
-      ticket_id: ticketId,
-      orario_scansione: orarioScansione,
-    })
-    .select("id, ticket_id, orario_scansione")
-    .maybeSingle()
-
-  if (insErr) {
-    return { ok: false, reason: "server", message: insErr.message }
-  }
-
-  const { data: scansioniRows, error: listErr } = await supabase
-    .schema("public")
-    .from("scansioni")
-    .select("id, orario_scansione")
-    .eq("ticket_id", ticketId)
-    .order("orario_scansione", { ascending: false })
-
-  if (listErr) {
-    console.error("[process-scan] lettura public.scansioni fallita:", listErr.message)
-  }
-
-  const scansioni: ScansioneRow[] = (scansioniRows ?? []).map((r) => ({
-    id: String((r as { id: unknown }).id),
-    orario_scansione: String((r as { orario_scansione: unknown }).orario_scansione ?? ""),
-  }))
-
   let spettacolo = "Spettacolo"
   const rid = pren.replica_id != null ? String(pren.replica_id) : ""
   if (rid) {
@@ -124,17 +100,57 @@ export async function processTicketScan(ticketIdRaw: string): Promise<ScanProces
     if (sp?.nome_spettacolo) spettacolo = String(sp.nome_spettacolo)
   }
 
-  const lastOrario =
-    insertedScan && (insertedScan as { orario_scansione?: string }).orario_scansione
-      ? String((insertedScan as { orario_scansione: string }).orario_scansione)
-      : orarioScansione
+  const nome = String(pren.nome ?? "")
+  const cognome = String(pren.cognome ?? "")
+
+  // Biglietto già usato: non registra un nuovo ingresso.
+  const { data: previousScans, error: prevErr } = await supabase
+    .schema("public")
+    .from("scansioni")
+    .select("id, orario_scansione")
+    .eq("ticket_id", ticketId)
+    .order("orario_scansione", { ascending: true })
+
+  if (prevErr) {
+    return { ok: false, reason: "server", message: prevErr.message }
+  }
+
+  const previous: ScansioneRow[] = (previousScans ?? []).map((r) => ({
+    id: String((r as { id: unknown }).id),
+    orario_scansione: String((r as { orario_scansione: unknown }).orario_scansione ?? ""),
+  }))
+
+  if (previous.length > 0) {
+    return {
+      ok: false,
+      reason: "already_scanned",
+      message: "Biglietto già scansionato - Ingresso già avvenuto",
+      nome,
+      cognome,
+      spettacolo,
+      primoIngresso: previous[0].orario_scansione,
+    }
+  }
+
+  const orarioScansione = new Date().toISOString()
+
+  const { error: insErr } = await supabase
+    .schema("public")
+    .from("scansioni")
+    .insert({
+      ticket_id: ticketId,
+      orario_scansione: orarioScansione,
+    })
+
+  if (insErr) {
+    return { ok: false, reason: "server", message: insErr.message }
+  }
 
   return {
     ok: true,
-    nome: String(pren.nome ?? ""),
-    cognome: String(pren.cognome ?? ""),
+    nome,
+    cognome,
     spettacolo,
-    orarioScansione: lastOrario,
-    scansioni,
+    orarioScansione,
   }
 }

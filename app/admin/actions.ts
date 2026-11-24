@@ -198,7 +198,7 @@ export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<Co
   const stato = String(row.stato_pagamento ?? "").toLowerCase()
   if (stato === "confermato") return { ok: true }
   if (stato !== "riservato") {
-    return { ok: false, error: "Si possono confermare solo le prenotazioni senza pagamento in attesa." }
+    return { ok: false, error: "Si possono confermare solo le prenotazioni in attesa di conferma." }
   }
 
   const createdMs = new Date(String(row.created_at ?? "")).getTime()

@@ -22,7 +22,11 @@ Il titolare non è uno sviluppatore: le spiegazioni all'utente vanno date in ita
 - `app/spettacoli`: elenco spettacoli e repliche
 - `app/page.tsx` + `components/theater/theater-booking.tsx`: mappa posti, carrello, checkout o prenotazione
 - `app/admin`: pannello admin (protetto da Basic Auth in `middleware.ts`, utente `admin`, password `ADMIN_PASSWORD`)
-- `app/scan`: scanner QR all'ingresso (`lib/tickets/process-scan.ts`)
+- `app/scan`: verifica QR all'ingresso (`lib/tickets/process-scan.ts`). Riservata agli operatori: password
+  `SCAN_PASSWORD` (se manca, `ADMIN_PASSWORD`), ricordata per 30 giorni con cookie (`lib/tickets/scan-auth.ts`).
+  Un biglietto vale per un solo ingresso: dalla seconda scansione mostra "Biglietto già scansionato".
+  La scansione non conferma le prenotazioni: la conferma la fa l'operatore in admin dopo il pagamento SIAE
+- L'indirizzo nel QR viene da `NEXT_PUBLIC_TICKET_SCAN_ORIGIN` (impostata su Vercel, tipo Config)
 - `app/api/prenota`: prenotazione senza pagamento online
 - `app/api/cleanup`: elimina prenotazioni `pending` e `riservato` scadute
 - `lib/booking/prenotazioni-utils.ts`: regole di disponibilità dei posti (unica fonte di verità)
