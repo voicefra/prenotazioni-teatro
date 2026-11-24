@@ -2,6 +2,7 @@
  * Base URL per i QR di ingresso.
  * - In locale (localhost / 127.0.0.1) si usa sempre **http://** (mai https forzato).
  * - In produzione imposta `NEXT_PUBLIC_TICKET_SCAN_ORIGIN` con l’URL pubblico (di solito https).
+ *   Se manca, su Vercel si usa `VERCEL_PROJECT_PRODUCTION_URL` (fornita automaticamente).
  */
 
 function isLocalHostname(hostname: string): boolean {
@@ -19,7 +20,11 @@ function normalizeProtocolForScanBase(parsed: URL): void {
  * Origine senza slash finale, es. `http://localhost:3000` o `https://miosito.it`
  */
 export function getTicketScanOrigin(): string {
-  const raw = process.env.NEXT_PUBLIC_TICKET_SCAN_ORIGIN?.trim()
+  // Ordine: variabile esplicita, poi dominio di produzione fornito da Vercel, poi URL del deploy, infine localhost.
+  const raw =
+    process.env.NEXT_PUBLIC_TICKET_SCAN_ORIGIN?.trim() ||
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
+    process.env.VERCEL_URL?.trim()
   const fallback = "http://localhost:3000"
 
   if (!raw) {
