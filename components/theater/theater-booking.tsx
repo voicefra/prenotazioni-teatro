@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Stage } from "./stage"
 import { SeatRow } from "./seat-row"
+import { fiscalDisclaimerFor } from "@/lib/fiscal-disclaimer"
 import { Cart, type CartBookingMode } from "./cart"
 import { Legend } from "./legend"
 import type { SeatStatus } from "./seat"
@@ -86,9 +87,6 @@ interface PendingCheckoutData {
 
 const PENDING_SEATS_KEY = "pending_seats"
 const PENDING_CHECKOUT_DATA_KEY = "pending_checkout_data"
-
-const FISCAL_DISCLAIMER =
-  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
 
 const initialFormData: BookingFormData = {
   nome: "",
@@ -858,7 +856,7 @@ export function TheaterBooking() {
         setIsDataModalOpen(false)
         setFormData(initialFormData)
         setBookingConfirmMessage(
-          "Ti abbiamo inviato una email con il riepilogo della prenotazione. Attenzione: il posto è riservato solo per 48 ore. Entro questo termine devi ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE: solo così la prenotazione sarà confermata e riceverai una seconda email con il QR code per l'ingresso. Trascorse le 48 ore senza pagamento, il posto torna libero. Non è possibile prenotare ora e pagare al botteghino il giorno dello spettacolo.",
+          "Ti abbiamo inviato una email con il riepilogo della prenotazione. Attenzione: il posto è riservato solo per 48 ore. Entro questo termine devi ritirare e pagare il biglietto fiscale marcato SIAE presso un punto vendita autorizzato o presso la sede dell'organizzatore: solo così la prenotazione sarà confermata e riceverai una seconda email con il QR code per l'ingresso. Trascorse le 48 ore senza pagamento, il posto torna libero. Non è possibile prenotare ora e pagare al botteghino il giorno dello spettacolo.",
         )
         setBookingConfirmed(true)
         window.scrollTo({ top: 0, behavior: "smooth" })
@@ -1204,8 +1202,8 @@ export function TheaterBooking() {
                   </div>
                   {isSoloPrenotazione ? (
                     <p className="pt-1 text-center text-xs leading-relaxed text-muted-foreground">
-                      Gli importi indicati hanno valore di semplice promemoria: indicano quanto dovrai versare
-                      all&apos;organizzazione, entro 48 ore dalla prenotazione, al momento
+                      Gli importi indicati hanno valore di semplice promemoria: indicano quanto dovrai versare,
+                      entro 48 ore dalla prenotazione, presso un punto vendita autorizzato o presso la sede dell&apos;organizzatore, al momento
                       dell&apos;emissione del biglietto fiscale marcato SIAE. La prenotazione online non costituisce
                       titolo di ingresso: l&apos;unico titolo valido per l&apos;accesso allo spettacolo è il biglietto
                       fiscale marcato SIAE.
@@ -1255,7 +1253,7 @@ export function TheaterBooking() {
       </main>
       <footer className="border-t border-border/60 bg-card/20 px-4 pt-4 pb-28 lg:pb-4">
         <div className="container mx-auto">
-          <small className="block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
+          <small className="block text-xs leading-relaxed text-muted-foreground">{fiscalDisclaimerFor(isSoloPrenotazione)}</small>
         </div>
       </footer>
 

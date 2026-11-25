@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { FISCAL_DISCLAIMER, FISCAL_NOTE_SOLO_PRENOTAZIONE } from "@/lib/fiscal-disclaimer"
 import { useEffect, useState, Suspense, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { supabase } from "@/lib/supabase"
@@ -35,9 +36,6 @@ interface TeatroRow {
   numero_file: number
   posti_per_fila: number
 }
-
-const FISCAL_DISCLAIMER =
-  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
 
 function capienzaTeatro(teatro: TeatroRow | null): number {
   if (!teatro) return 0
@@ -395,6 +393,7 @@ function SpettacoliContent() {
       <footer className="border-t border-border/60 bg-card/20 px-4 py-4">
         <div className="container mx-auto">
           <small className="block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
+          <small className="mt-2 block text-xs leading-relaxed text-muted-foreground">{FISCAL_NOTE_SOLO_PRENOTAZIONE}</small>
         </div>
       </footer>
     </main>

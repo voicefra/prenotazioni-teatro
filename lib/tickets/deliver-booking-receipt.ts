@@ -2,6 +2,7 @@ import type Stripe from "stripe"
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { Resend } from "resend"
 import { renderTicketsPdf, type TicketSeat } from "@/lib/tickets/ticket-pdf"
+import { fiscalDisclaimerFor } from "@/lib/fiscal-disclaimer"
 import { buildTicketScanUrl } from "@/lib/tickets/scan-url"
 import { formatTimeHHmm } from "@/lib/datetime-format"
 import { RESERVATION_HOLD_MS, normalizeBookedSeats } from "@/lib/booking/prenotazioni-utils"
@@ -95,9 +96,6 @@ type TeatroRow = {
   comune?: string | null
   telefono?: string | null
 }
-
-const FISCAL_DISCLAIMER =
-  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
 
 function formatSenderFromAddress(rawFrom: string): string {
   const trimmed = rawFrom.trim()
@@ -379,6 +377,7 @@ async function sendReceiptForRows(
         prezzoBiglietto: prezzoPrenotazione,
         dirittiPrevendita: dirittiPrenotazione,
         ticketScanUrl,
+        fiscalDisclaimer: fiscalDisclaimerFor(meta.mode !== "stripe"),
       } as never)
       attachments.push({
         filename: `ricevuta-prenotazione-${safeFileSlug}.pdf`,
@@ -418,7 +417,7 @@ async function sendReceiptForRows(
     meta.mode === "richiesta"
       ? `<p style="margin:0 0 14px 0;">Grazie per la tua prenotazione. Il posto è <strong>riservato per 48 ore</strong>, fino a <strong>${escapeHtml(meta.scadenza ?? "")}</strong>.</p>
          <div style="border:2px solid #f59e0b;border-radius:10px;padding:14px;background:#fffbeb;margin:0 0 18px 0;">
-           <p style="margin:0 0 8px 0;"><strong>Cosa devi fare:</strong> entro questo termine devi <strong>ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE</strong>. Solo dopo il pagamento la prenotazione sarà confermata e riceverai una seconda email con la ricevuta e il QR code per l'ingresso.</p>
+           <p style="margin:0 0 8px 0;"><strong>Cosa devi fare:</strong> entro questo termine devi <strong>ritirare e pagare il biglietto fiscale marcato SIAE presso un punto vendita autorizzato o presso la sede dell'organizzatore</strong>. Solo dopo il pagamento la prenotazione sarà confermata e riceverai una seconda email con la ricevuta e il QR code per l'ingresso.</p>
            <p style="margin:0 0 8px 0;">Trascorse le 48 ore senza pagamento, la prenotazione viene annullata e il posto torna libero.</p>
            <p style="margin:0;"><strong>Non è possibile pagare al botteghino il giorno dello spettacolo.</strong></p>
          </div>
@@ -493,7 +492,7 @@ async function sendReceiptForRows(
 
           <div style="font-size:10px;color:#475569;border-top:1px solid #e5e7eb;padding-top:12px;line-height:1.45;">
             <p style="margin:0 0 8px 0;"><strong>DICHIARAZIONE FISCALE:</strong><br />
-            ${escapeHtml(FISCAL_DISCLAIMER)}</p>
+            ${escapeHtml(fiscalDisclaimerFor(meta.mode !== "stripe"))}</p>
             <p style="margin:0 0 8px 0;"><strong>NOTE LEGALI:</strong><br />
             L'Organizzatore gestisce i Titoli di Accesso in nome e per conto di se stesso. Il contratto relativo alla prenotazione dei Titoli di Accesso si intende pertanto concluso direttamente tra il Cliente e l’Organizzatore. La nostra Associazione agisce esclusivamente come intermediario tecnologico per la gestione della piattaforma di prenotazione.</p>
             <p style="margin:0 0 8px 0;"><strong>TERMINI E CONDIZIONI:</strong><br />

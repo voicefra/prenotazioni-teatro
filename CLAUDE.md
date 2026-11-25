@@ -41,7 +41,7 @@ Il titolare non è uno sviluppatore: le spiegazioni all'utente vanno date in ita
   - `riservato`: prenotazione senza pagamento, occupa il posto per 48 ore. Il cliente deve ritirare e pagare
     il biglietto fiscale SIAE presso l'organizzazione entro 48 ore, poi l'admin conferma
   - `confermato`: confermato dall'admin, occupa il posto in modo definitivo
-- Il portale non emette titoli fiscali: il biglietto SIAE viene emesso dall'organizzazione (vedi `FISCAL_DISCLAIMER`)
+- Il portale non emette titoli fiscali: il biglietto SIAE viene emesso dall'organizzazione (testi in `lib/fiscal-disclaimer.ts`: versione per pagamento online e per "solo prenotazione")
 - Una riga di `prenotazioni` per ogni posto
 
 ## Database e migrazioni

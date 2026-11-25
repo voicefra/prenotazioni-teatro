@@ -1,6 +1,7 @@
 "use server"
 
 import QRCode from "qrcode"
+import { FISCAL_DISCLAIMER } from "@/lib/fiscal-disclaimer"
 import { buffer as streamConsumersBuffer } from "node:stream/consumers"
 import { Readable } from "node:stream"
 import React from "react"
@@ -25,10 +26,9 @@ export type TicketPdfInput = {
   dirittiPrevendita?: number
   /** URL completo nel QR (es. https://localhost:3000/scan?ticket_id=<uuid prenotazione>) */
   ticketScanUrl: string
+  /** Testo della dichiarazione fiscale (default: pagamento online) */
+  fiscalDisclaimer?: string
 }
-
-const FISCAL_DISCLAIMER =
-  "Si tiene a precisare che il suddetto portale web che viene utilizzato non opera come Sistema di Biglietteria Automatizzata ai sensi del Provvedimento Agenzia Entrate del 23/07/2001, in quanto non emette alcun Titolo di Accesso fiscale. Il portale è un mero strumento di e-commerce per la prenotazione e il pagamento anticipato. L'assolvimento degli obblighi fiscali e del diritto d'autore per l'accesso allo spettacolo avverrà tramite l'emissione di regolari Titoli di Accesso fiscali premarcati SIAE, che avverrà direttamente in biglietteria, il giorno dello spettacolo, presentando al personale addetto, il voucher di prenotazione che verrà inviato sulla mail. Gli incassi verranno quindi regolarmente rendicontati tramite Modello C1."
 
 const styles = StyleSheet.create({
   page: {
@@ -168,7 +168,9 @@ function TicketPage({
   dirittiPrevendita,
   seat,
   qrDataUrl,
+  fiscalDisclaimer,
 }: {
+  fiscalDisclaimer?: string
   spettacolo: string
   data: string
   orario: string
@@ -239,7 +241,7 @@ function TicketPage({
       </View>
 
       <Text style={styles.footer}>
-        DICHIARAZIONE FISCALE: {FISCAL_DISCLAIMER}
+        DICHIARAZIONE FISCALE: {fiscalDisclaimer ?? FISCAL_DISCLAIMER}
       </Text>
       <Text style={styles.footer}>
         NOTE LEGALI: L'Organizzatore gestisce i Titoli di Accesso in nome e per conto di se stesso. Il contratto
@@ -288,6 +290,7 @@ export async function renderTicketsPdf(input: TicketPdfInput): Promise<Buffer> {
           teatroTelefono={input.teatroTelefono}
           data={input.data}
           orario={input.orario}
+          fiscalDisclaimer={input.fiscalDisclaimer}
           prezzoBiglietto={input.prezzoBiglietto}
           dirittiPrevendita={input.dirittiPrevendita}
           seat={seat}
