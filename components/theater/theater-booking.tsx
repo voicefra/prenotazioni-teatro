@@ -1202,10 +1202,22 @@ export function TheaterBooking() {
                     <span className="text-muted-foreground">Diritti di prenotazione (per posto)</span>
                     <span className="font-semibold text-primary">€{dirittiPrevenditaEur.toFixed(2)}</span>
                   </div>
-                  <p className="pt-1 text-center text-xs text-muted-foreground">
-                    Il totale della prenotazione include titolo di accesso e costo servizio per i posti
-                    {bookingMode === "posto_unico" ? " richiesti" : " selezionati"}.
-                  </p>
+                  {isSoloPrenotazione ? (
+                    <p className="pt-1 text-center text-xs leading-relaxed text-muted-foreground">
+                      Gli importi indicati hanno valore di semplice promemoria: indicano quanto dovrai versare
+                      all&apos;organizzazione, entro 48 ore dalla prenotazione, al momento
+                      dell&apos;emissione del biglietto fiscale marcato SIAE. La prenotazione online non costituisce
+                      titolo di ingresso: l&apos;unico titolo valido per l&apos;accesso allo spettacolo è il biglietto
+                      fiscale marcato SIAE.
+                    </p>
+                  ) : (
+                    <p className="pt-1 text-center text-xs leading-relaxed text-muted-foreground">
+                      L&apos;importo pagato online riguarda la prenotazione dei posti e i relativi diritti. La
+                      ricevuta di prenotazione inviata via email non è una ricevuta fiscale né un titolo di ingresso:
+                      il biglietto fiscale marcato SIAE verrà emesso all&apos;ingresso, mostrando al personale il QR
+                      code di prenotazione.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
