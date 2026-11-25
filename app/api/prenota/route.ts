@@ -7,6 +7,7 @@ import {
   pendingHoldCutoffIso,
   prenotazioniAvailabilityOrFilter,
 } from "@/lib/booking/prenotazioni-utils"
+import { POSTI_NON_DISPONIBILI, PG_UNIQUE_VIOLATION, purgeExpiredForReplica } from "@/lib/booking/prenotazioni-server"
 import { deliverBookingReceiptForReservation } from "@/lib/tickets/deliver-booking-receipt"
 
 export const runtime = "nodejs"
@@ -82,6 +83,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Questo spettacolo usa posto unico." }, { status: 400 })
     }
 
+    await purgeExpiredForReplica(supabase, safeReplicaId)
+
     const { data: statusRows, error: statusError } = await supabase
       .from("prenotazioni")
       .select("posti_prenotati, stato_pagamento, created_at")
@@ -145,6 +148,9 @@ export async function POST(request: Request) {
       .select("id")
 
     if (insertErr) {
+      if (insertErr.code === PG_UNIQUE_VIOLATION) {
+        return NextResponse.json({ error: POSTI_NON_DISPONIBILI }, { status: 409 })
+      }
       return NextResponse.json({ error: insertErr.message }, { status: 500 })
     }
 

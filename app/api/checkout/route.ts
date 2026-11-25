@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import Stripe from "stripe"
 import { createClient } from "@supabase/supabase-js"
+import { POSTI_NON_DISPONIBILI, PG_UNIQUE_VIOLATION, purgeExpiredForReplica } from "@/lib/booking/prenotazioni-server"
 import {
   capienzaFromTeatro,
   collectOccupiedSeatCodes,
@@ -149,6 +150,8 @@ export async function POST(request: Request) {
 
     const fifteenMinutesAgo = pendingHoldCutoffIso()
 
+    await purgeExpiredForReplica(supabase, safeReplicaId)
+
     const { data: statusRows, error: statusError } = await supabase
       .from("prenotazioni")
       .select("posti_prenotati, stato_pagamento, created_at")
@@ -270,6 +273,9 @@ export async function POST(request: Request) {
 
     if (insertErr) {
       await stripe.checkout.sessions.expire(session.id).catch(() => undefined)
+      if (insertErr.code === PG_UNIQUE_VIOLATION) {
+        return NextResponse.json({ error: POSTI_NON_DISPONIBILI }, { status: 409 })
+      }
       return NextResponse.json({ error: insertErr.message }, { status: 500 })
     }
 

@@ -263,6 +263,7 @@ export function TheaterBooking() {
 
   // Evita doppie esecuzioni in dev (React Strict Mode)
   const successHandledRef = useRef(false)
+  const submitLockRef = useRef(false)
   const canceledHandledRef = useRef(false)
   const loadSeatsRequestRef = useRef(0)
 
@@ -728,7 +729,7 @@ export function TheaterBooking() {
     setIsDataModalOpen(false)
   }, [isSubmittingBooking])
 
-  const handleConfirmData = useCallback(async () => {
+  const confirmDataInner = useCallback(async () => {
     const nome = formData.nome.trim()
     const cognome = formData.cognome.trim()
     const email = formData.email.trim()
@@ -944,6 +945,19 @@ export function TheaterBooking() {
     prezzoBigliettoEur,
     isSoloPrenotazione,
   ])
+
+  // Blocco immediato contro doppio tocco/doppio clic: una sola richiesta alla volta.
+  const handleConfirmData = useCallback(async () => {
+    if (submitLockRef.current) return
+    submitLockRef.current = true
+    setIsSubmittingBooking(true)
+    try {
+      await confirmDataInner()
+    } finally {
+      submitLockRef.current = false
+      setIsSubmittingBooking(false)
+    }
+  }, [confirmDataInner])
 
   const handleClearCart = useCallback(async () => {
     if (bookingMode === "posto_unico") {
