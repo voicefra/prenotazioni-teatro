@@ -181,8 +181,9 @@ export type ConfermaPrenotazioneResult =
   | { ok: false; error: string }
 
 /**
- * L'organizzatore ha incassato il biglietto SIAE: conferma TUTTI i posti della stessa prenotazione
- * (stessa email, replica e momento di inserimento) e invia l'email con PDF e QR code.
+ * L'organizzatore ha incassato il biglietto SIAE di UN posto: conferma solo quel posto
+ * e invia l'email con il PDF e il QR code di quel posto.
+ * Gli altri posti della stessa prenotazione restano "riservato" (da confermare o annullare a parte).
  */
 export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<ConfermaPrenotazioneResult> {
   const bookingId = String(id ?? "").trim()
@@ -194,7 +195,7 @@ export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<Co
 
   const { data: row, error: readErr } = await supabase
     .from("prenotazioni")
-    .select("id, stato_pagamento, created_at, email, replica_id")
+    .select("id, stato_pagamento, created_at")
     .eq("id", bookingId)
     .maybeSingle()
 
@@ -207,39 +208,74 @@ export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<Co
     return { ok: false, error: "Si possono confermare solo le prenotazioni in attesa di conferma." }
   }
 
-  // Tutti i posti inseriti insieme nella stessa prenotazione
-  const { data: groupRows, error: groupErr } = await supabase
-    .from("prenotazioni")
-    .select("id")
-    .eq("replica_id", String(row.replica_id ?? ""))
-    .eq("email", String(row.email ?? ""))
-    .eq("created_at", String(row.created_at ?? ""))
-    .eq("stato_pagamento", "riservato")
-
-  if (groupErr) return { ok: false, error: groupErr.message }
-  const ids = [...new Set([bookingId, ...(groupRows ?? []).map((r) => String((r as { id: unknown }).id))])]
-
   const createdMs = new Date(String(row.created_at ?? "")).getTime()
   if (!Number.isFinite(createdMs) || Date.now() - createdMs >= RESERVATION_HOLD_MS) {
-    await supabase.from("prenotazioni").delete().in("id", ids).eq("stato_pagamento", "riservato")
-    return { ok: false, error: "Le 48 ore sono scadute: i posti sono stati liberati." }
+    await supabase.from("prenotazioni").delete().eq("id", bookingId).eq("stato_pagamento", "riservato")
+    return { ok: false, error: "Le 48 ore sono scadute: il posto è stato liberato." }
   }
 
-  const { error: upErr } = await supabase
+  const { data: updated, error: upErr } = await supabase
     .from("prenotazioni")
     .update({ stato_pagamento: "confermato" })
-    .in("id", ids)
+    .eq("id", bookingId)
     .eq("stato_pagamento", "riservato")
+    .select("id")
 
   if (upErr) return { ok: false, error: upErr.message }
+  if (!updated || updated.length === 0) return { ok: true, posti: 0 }
 
-  const mail = await deliverBookingReceiptForConfirmed(supabase, ids)
+  const mail = await deliverBookingReceiptForConfirmed(supabase, [bookingId])
   if (!mail.ok) {
     return {
       ok: true,
-      posti: ids.length,
-      warning: `Prenotazione confermata, ma l'email con il QR non è partita: ${mail.error}`,
+      posti: 1,
+      warning: `Posto confermato, ma l'email con il QR non è partita: ${mail.error}`,
     }
   }
-  return { ok: true, posti: ids.length, ...(mail.warning ? { warning: mail.warning } : {}) }
+  return { ok: true, posti: 1, ...(mail.warning ? { warning: mail.warning } : {}) }
+}
+
+export type AnnullaPostoResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * Annulla un singolo posto prenotato senza pagamento online ("riservato" o "confermato"):
+ * il posto torna libero. I posti pagati con Stripe non si annullano da qui (servirebbe un rimborso).
+ */
+export async function annullaPostoPrenotato(id: string): Promise<AnnullaPostoResult> {
+  const bookingId = String(id ?? "").trim()
+  if (!bookingId) return { ok: false, error: "Prenotazione non valida." }
+
+  const client = getServiceClient()
+  if (!client.ok) return { ok: false, error: client.error }
+  const { supabase } = client
+
+  const { data: row, error: readErr } = await supabase
+    .from("prenotazioni")
+    .select("id, stato_pagamento")
+    .eq("id", bookingId)
+    .maybeSingle()
+
+  if (readErr) return { ok: false, error: readErr.message }
+  if (!row) return { ok: true }
+
+  const stato = String(row.stato_pagamento ?? "").toLowerCase()
+  if (stato !== "riservato" && stato !== "confermato") {
+    return {
+      ok: false,
+      error: "Si possono annullare solo i posti prenotati senza pagamento online (in attesa o confermati).",
+    }
+  }
+
+  // Prima le eventuali scansioni (collegate al biglietto), poi la prenotazione
+  const { error: scanErr } = await supabase.from("scansioni").delete().eq("ticket_id", bookingId)
+  if (scanErr) return { ok: false, error: `Eliminazione scansioni fallita: ${scanErr.message}` }
+
+  const { error: delErr } = await supabase
+    .from("prenotazioni")
+    .delete()
+    .eq("id", bookingId)
+    .in("stato_pagamento", ["riservato", "confermato"])
+  if (delErr) return { ok: false, error: delErr.message }
+
+  return { ok: true }
 }

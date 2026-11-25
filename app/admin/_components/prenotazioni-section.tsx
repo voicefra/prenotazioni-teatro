@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { logSupabaseDev } from "./admin-shared"
-import { confermaPrenotazioneSenzaPagamento } from "../actions"
+import { annullaPostoPrenotato, confermaPrenotazioneSenzaPagamento } from "../actions"
 
 interface SpettacoloOpt {
   id: string
@@ -69,6 +69,7 @@ export function PrenotazioniSection() {
   const [sortKey, setSortKey] = useState<SortKey>("nome")
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc")
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
@@ -194,24 +195,17 @@ export function PrenotazioniSection() {
     return raw?.trim() || "—"
   }
 
-  const confermaPrenotazione = async (id: string) => {
-    const target = prenotazioni.find((p) => String(p.id) === id)
-    const gruppo = target
-      ? prenotazioni.filter(
-          (p) =>
-            String(p.stato_pagamento ?? "").toLowerCase() === "riservato" &&
-            p.email === target.email &&
-            p.created_at === target.created_at,
-        )
-      : []
-    const nPosti = Math.max(1, gruppo.length)
-    const chi = target ? `${target.nome ?? ""} ${target.cognome ?? ""}`.trim() : ""
-    const ok = window.confirm(
-      `Confermi di aver ricevuto il pagamento${chi ? ` da ${chi}` : ""} per ${nPosti} ${
-        nPosti === 1 ? "posto" : "posti"
-      }?
+  const descriviPosto = (p: PrenotazioneRow | undefined): { posto: string; chi: string } => ({
+    posto: p ? formatPosti(p.posti_prenotati) : "",
+    chi: p ? `${p.nome ?? ""} ${p.cognome ?? ""}`.trim() : "",
+  })
 
-Verranno confermati tutti i posti di questa prenotazione e partirà l'email con i QR code per l'ingresso.`,
+  const confermaPrenotazione = async (id: string) => {
+    const { posto, chi } = descriviPosto(prenotazioni.find((p) => String(p.id) === id))
+    const ok = window.confirm(
+      `Confermi di aver ricevuto il pagamento${chi ? ` da ${chi}` : ""} per il posto ${posto || "selezionato"}?
+
+Verrà confermato solo questo posto e partirà l'email con il QR code per l'ingresso.`,
     )
     if (!ok) return
 
@@ -225,9 +219,33 @@ Verranno confermati tutti i posti di questa prenotazione e partirà l'email con 
     } else if (result.warning) {
       setError(result.warning)
     } else if (result.posti > 0) {
-      setNotice(
-        `Prenotazione confermata (${result.posti} ${result.posti === 1 ? "posto" : "posti"}). Email con i QR code inviata.`,
-      )
+      setNotice(`Posto ${posto} confermato. Email con il QR code inviata.`)
+    }
+    if (replicaId) await loadPrenotazioni(replicaId)
+  }
+
+  const annullaPosto = async (id: string) => {
+    const target = prenotazioni.find((p) => String(p.id) === id)
+    const { posto, chi } = descriviPosto(target)
+    const confermato = String(target?.stato_pagamento ?? "").toLowerCase() === "confermato"
+    const ok = window.confirm(
+      `Vuoi annullare il posto ${posto || "selezionato"}${chi ? ` prenotato da ${chi}` : ""}?
+
+Il posto tornerà libero e la prenotazione verrà eliminata. L'operazione non si può annullare.${
+        confermato ? "\n\nAttenzione: questo posto era già confermato, il suo QR code non sarà più valido." : ""
+      }`,
+    )
+    if (!ok) return
+
+    setCancellingId(id)
+    setError(null)
+    setNotice(null)
+    const result = await annullaPostoPrenotato(id)
+    setCancellingId(null)
+    if (!result.ok) {
+      setError(result.error)
+    } else {
+      setNotice(`Posto ${posto} annullato: ora è di nuovo libero.`)
     }
     if (replicaId) await loadPrenotazioni(replicaId)
   }
@@ -464,18 +482,35 @@ Verranno confermati tutti i posti di questa prenotazione e partirà l'email con 
                         <td className="px-3 py-2 text-xs">{formatPosti(p.posti_prenotati)}</td>
                         <td className="px-3 py-2">{pagamentoLabel(p.stato_pagamento)}</td>
                         <td className="px-3 py-2 print:hidden">
-                          {String(p.stato_pagamento ?? "").toLowerCase() === "riservato" ? (
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={confirmingId === String(p.id)}
-                              onClick={() => void confermaPrenotazione(String(p.id))}
-                            >
-                              {confirmingId === String(p.id) ? "Conferma…" : "Conferma"}
-                            </Button>
-                          ) : (
-                            "—"
-                          )}
+                          {(() => {
+                            const stato = String(p.stato_pagamento ?? "").toLowerCase()
+                            const pid = String(p.id)
+                            const busy = confirmingId === pid || cancellingId === pid
+                            if (stato !== "riservato" && stato !== "confermato") return "—"
+                            return (
+                              <div className="flex flex-wrap gap-2">
+                                {stato === "riservato" && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    disabled={busy}
+                                    onClick={() => void confermaPrenotazione(pid)}
+                                  >
+                                    {confirmingId === pid ? "Conferma…" : "Conferma"}
+                                  </Button>
+                                )}
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="destructive"
+                                  disabled={busy}
+                                  onClick={() => void annullaPosto(pid)}
+                                >
+                                  {cancellingId === pid ? "Annullo…" : "Annulla"}
+                                </Button>
+                              </div>
+                            )
+                          })()}
                         </td>
                         <td className="px-3 py-2">{ingressoLabel(p.stato_ingresso)}</td>
                       </tr>
