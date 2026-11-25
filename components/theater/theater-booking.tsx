@@ -858,7 +858,7 @@ export function TheaterBooking() {
         setIsDataModalOpen(false)
         setFormData(initialFormData)
         setBookingConfirmMessage(
-          "Ti abbiamo inviato una email con il riepilogo e il PDF. Attenzione: il posto è riservato solo per 48 ore. Entro questo termine devi ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE: solo così la prenotazione sarà confermata. Trascorse le 48 ore senza pagamento, il posto torna libero. Non è possibile prenotare ora e pagare al botteghino il giorno dello spettacolo.",
+          "Ti abbiamo inviato una email con il riepilogo della prenotazione. Attenzione: il posto è riservato solo per 48 ore. Entro questo termine devi ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE: solo così la prenotazione sarà confermata e riceverai una seconda email con il QR code per l'ingresso. Trascorse le 48 ore senza pagamento, il posto torna libero. Non è possibile prenotare ora e pagare al botteghino il giorno dello spettacolo.",
         )
         setBookingConfirmed(true)
         window.scrollTo({ top: 0, behavior: "smooth" })

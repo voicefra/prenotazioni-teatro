@@ -69,6 +69,7 @@ export function PrenotazioniSection() {
   const [sortKey, setSortKey] = useState<SortKey>("nome")
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc")
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
     void fetch("/api/cleanup", { method: "GET" }).catch(() => undefined)
@@ -194,12 +195,39 @@ export function PrenotazioniSection() {
   }
 
   const confermaPrenotazione = async (id: string) => {
+    const target = prenotazioni.find((p) => String(p.id) === id)
+    const gruppo = target
+      ? prenotazioni.filter(
+          (p) =>
+            String(p.stato_pagamento ?? "").toLowerCase() === "riservato" &&
+            p.email === target.email &&
+            p.created_at === target.created_at,
+        )
+      : []
+    const nPosti = Math.max(1, gruppo.length)
+    const chi = target ? `${target.nome ?? ""} ${target.cognome ?? ""}`.trim() : ""
+    const ok = window.confirm(
+      `Confermi di aver ricevuto il pagamento${chi ? ` da ${chi}` : ""} per ${nPosti} ${
+        nPosti === 1 ? "posto" : "posti"
+      }?
+
+Verranno confermati tutti i posti di questa prenotazione e partirà l'email con i QR code per l'ingresso.`,
+    )
+    if (!ok) return
+
     setConfirmingId(id)
     setError(null)
+    setNotice(null)
     const result = await confermaPrenotazioneSenzaPagamento(id)
     setConfirmingId(null)
     if (!result.ok) {
       setError(result.error)
+    } else if (result.warning) {
+      setError(result.warning)
+    } else if (result.posti > 0) {
+      setNotice(
+        `Prenotazione confermata (${result.posti} ${result.posti === 1 ? "posto" : "posti"}). Email con i QR code inviata.`,
+      )
     }
     if (replicaId) await loadPrenotazioni(replicaId)
   }
@@ -309,6 +337,11 @@ export function PrenotazioniSection() {
           {error && (
             <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
+            </p>
+          )}
+          {notice && (
+            <p className="rounded-md border border-green-600/40 bg-green-600/10 px-3 py-2 text-sm text-green-700 dark:text-green-400">
+              {notice}
             </p>
           )}
 

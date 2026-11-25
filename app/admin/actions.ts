@@ -2,6 +2,7 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import { RESERVATION_HOLD_MS } from "@/lib/booking/prenotazioni-utils"
+import { deliverBookingReceiptForConfirmed } from "@/lib/tickets/deliver-booking-receipt"
 
 const ALLOWED_TABLES = ["prenotazioni", "posti", "repliche", "spettacoli", "teatri"] as const
 const ORDER: readonly string[] = ["prenotazioni", "posti", "repliche", "spettacoli", "teatri"]
@@ -175,9 +176,14 @@ export async function adminReset(
   return { ok: true, mode: "global", truncated: listT }
 }
 
-export type ConfermaPrenotazioneResult = { ok: true } | { ok: false; error: string }
+export type ConfermaPrenotazioneResult =
+  | { ok: true; posti: number; warning?: string }
+  | { ok: false; error: string }
 
-/** Conferma una prenotazione senza pagamento ancora dentro le 48 ore. */
+/**
+ * L'organizzatore ha incassato il biglietto SIAE: conferma TUTTI i posti della stessa prenotazione
+ * (stessa email, replica e momento di inserimento) e invia l'email con PDF e QR code.
+ */
 export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<ConfermaPrenotazioneResult> {
   const bookingId = String(id ?? "").trim()
   if (!bookingId) return { ok: false, error: "Prenotazione non valida." }
@@ -188,7 +194,7 @@ export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<Co
 
   const { data: row, error: readErr } = await supabase
     .from("prenotazioni")
-    .select("id, stato_pagamento, created_at")
+    .select("id, stato_pagamento, created_at, email, replica_id")
     .eq("id", bookingId)
     .maybeSingle()
 
@@ -196,23 +202,44 @@ export async function confermaPrenotazioneSenzaPagamento(id: string): Promise<Co
   if (!row) return { ok: false, error: "Prenotazione non trovata." }
 
   const stato = String(row.stato_pagamento ?? "").toLowerCase()
-  if (stato === "confermato") return { ok: true }
+  if (stato === "confermato") return { ok: true, posti: 0 }
   if (stato !== "riservato") {
     return { ok: false, error: "Si possono confermare solo le prenotazioni in attesa di conferma." }
   }
 
+  // Tutti i posti inseriti insieme nella stessa prenotazione
+  const { data: groupRows, error: groupErr } = await supabase
+    .from("prenotazioni")
+    .select("id")
+    .eq("replica_id", String(row.replica_id ?? ""))
+    .eq("email", String(row.email ?? ""))
+    .eq("created_at", String(row.created_at ?? ""))
+    .eq("stato_pagamento", "riservato")
+
+  if (groupErr) return { ok: false, error: groupErr.message }
+  const ids = [...new Set([bookingId, ...(groupRows ?? []).map((r) => String((r as { id: unknown }).id))])]
+
   const createdMs = new Date(String(row.created_at ?? "")).getTime()
   if (!Number.isFinite(createdMs) || Date.now() - createdMs >= RESERVATION_HOLD_MS) {
-    await supabase.from("prenotazioni").delete().eq("id", bookingId).eq("stato_pagamento", "riservato")
-    return { ok: false, error: "Le 48 ore sono scadute: il posto è stato liberato." }
+    await supabase.from("prenotazioni").delete().in("id", ids).eq("stato_pagamento", "riservato")
+    return { ok: false, error: "Le 48 ore sono scadute: i posti sono stati liberati." }
   }
 
   const { error: upErr } = await supabase
     .from("prenotazioni")
     .update({ stato_pagamento: "confermato" })
-    .eq("id", bookingId)
+    .in("id", ids)
     .eq("stato_pagamento", "riservato")
 
   if (upErr) return { ok: false, error: upErr.message }
-  return { ok: true }
+
+  const mail = await deliverBookingReceiptForConfirmed(supabase, ids)
+  if (!mail.ok) {
+    return {
+      ok: true,
+      posti: ids.length,
+      warning: `Prenotazione confermata, ma l'email con il QR non è partita: ${mail.error}`,
+    }
+  }
+  return { ok: true, posti: ids.length, ...(mail.warning ? { warning: mail.warning } : {}) }
 }

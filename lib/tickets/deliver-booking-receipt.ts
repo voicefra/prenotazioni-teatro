@@ -4,7 +4,7 @@ import { Resend } from "resend"
 import { renderTicketsPdf, type TicketSeat } from "@/lib/tickets/ticket-pdf"
 import { buildTicketScanUrl } from "@/lib/tickets/scan-url"
 import { formatTimeHHmm } from "@/lib/datetime-format"
-import { normalizeBookedSeats } from "@/lib/booking/prenotazioni-utils"
+import { RESERVATION_HOLD_MS, normalizeBookedSeats } from "@/lib/booking/prenotazioni-utils"
 
 export type DeliverBookingReceiptResult =
   | { ok: true; alreadySent?: boolean; ticketIds: string[]; messageId?: string | null; warning?: string }
@@ -71,7 +71,15 @@ type BookingSeatRow = {
   email?: string | null
   telefono?: string | null
   replica_id?: string | null
+  created_at?: string | null
 }
+
+/**
+ * - `stripe`: pagamento online completato -> ricevuta con PDF e QR
+ * - `richiesta`: prenotazione senza pagamento appena fatta -> solo promemoria, NESSUN QR
+ * - `confermata`: l'organizzatore ha incassato e confermato -> ricevuta con PDF e QR
+ */
+type ReceiptMode = "stripe" | "richiesta" | "confermata"
 
 type SpettacoloRow = {
   nome_spettacolo?: string | null
@@ -164,13 +172,39 @@ export async function deliverBookingReceiptForStripeSession(
     orderDate,
     orderId,
     totalEur,
-    reservationHold: false,
+    mode: "stripe",
     resendKey,
     from,
   })
 }
 
-/** Email e PDF per prenotazioni senza pagamento (`stato_pagamento = riservato`). */
+async function loadRowsByIds(
+  supabase: SupabaseClient,
+  bookingIds: string[],
+  stato: "riservato" | "confermato",
+): Promise<{ ok: true; rows: BookingSeatRow[] } | { ok: false; error: string; code: string }> {
+  const ids = [...new Set(bookingIds.map((id) => String(id).trim()).filter(Boolean))]
+  if (ids.length === 0) {
+    return { ok: false, error: "Nessuna prenotazione da inviare.", code: "BOOKING_MISSING" }
+  }
+  const { data, error } = await supabase
+    .from("prenotazioni")
+    .select("id, tickets_sent_at, posti_prenotati, nome, cognome, email, telefono, replica_id, created_at")
+    .in("id", ids)
+    .eq("stato_pagamento", stato)
+    .order("created_at", { ascending: true })
+  if (error) return { ok: false, error: error.message, code: "BOOKING_LOOKUP" }
+  const rows = (data ?? []) as BookingSeatRow[]
+  if (rows.length === 0) {
+    return { ok: false, error: "Nessuna prenotazione da inviare.", code: "BOOKING_MISSING" }
+  }
+  return { ok: true, rows }
+}
+
+/**
+ * Prenotazione senza pagamento appena registrata (`riservato`):
+ * email di promemoria SENZA PDF e SENZA QR, con la scadenza delle 48 ore.
+ */
 export async function deliverBookingReceiptForReservation(
   supabase: SupabaseClient,
   bookingIds: string[],
@@ -180,33 +214,45 @@ export async function deliverBookingReceiptForReservation(
   if (!resendKey || !from) {
     return { ok: false, error: "Configurazione email mancante: RESEND_API_KEY e RESEND_FROM.", code: "MISSING_RESEND" }
   }
+  const loaded = await loadRowsByIds(supabase, bookingIds, "riservato")
+  if (!loaded.ok) return loaded
+  const rows = loaded.rows
 
-  const ids = [...new Set(bookingIds.map((id) => String(id).trim()).filter(Boolean))]
-  if (ids.length === 0) {
-    return { ok: false, error: "Nessuna prenotazione da inviare.", code: "BOOKING_MISSING" }
-  }
-
-  const { data: reservedRows, error: bookErr } = await supabase
-    .from("prenotazioni")
-    .select("id, tickets_sent_at, posti_prenotati, nome, cognome, email, telefono, replica_id")
-    .in("id", ids)
-    .eq("stato_pagamento", "riservato")
-    .order("created_at", { ascending: true })
-
-  if (bookErr) {
-    return { ok: false, error: bookErr.message, code: "BOOKING_LOOKUP" }
-  }
-
-  const rows = (reservedRows ?? []) as BookingSeatRow[]
-  if (rows.length === 0) {
-    return { ok: false, error: "Nessuna prenotazione senza pagamento da inviare.", code: "BOOKING_MISSING" }
-  }
+  const createdMs = new Date(String(rows[0]?.created_at ?? "")).getTime()
+  const baseMs = Number.isFinite(createdMs) ? createdMs : Date.now()
 
   return sendReceiptForRows(supabase, rows, {
-    orderDate: formatOrderDateItRome(new Date()),
+    orderDate: formatOrderDateItRome(new Date(baseMs)),
     orderId: String(rows[0]?.id ?? ""),
     totalEur: 0,
-    reservationHold: true,
+    mode: "richiesta",
+    scadenza: formatOrderDateItRome(new Date(baseMs + RESERVATION_HOLD_MS)),
+    resendKey,
+    from,
+  })
+}
+
+/**
+ * Prenotazione confermata dall'organizzatore dopo il pagamento (`confermato`):
+ * email di conferma con PDF e QR code individuale.
+ */
+export async function deliverBookingReceiptForConfirmed(
+  supabase: SupabaseClient,
+  bookingIds: string[],
+): Promise<DeliverBookingReceiptResult> {
+  const resendKey = process.env.RESEND_API_KEY
+  const from = process.env.RESEND_FROM
+  if (!resendKey || !from) {
+    return { ok: false, error: "Configurazione email mancante: RESEND_API_KEY e RESEND_FROM.", code: "MISSING_RESEND" }
+  }
+  const loaded = await loadRowsByIds(supabase, bookingIds, "confermato")
+  if (!loaded.ok) return loaded
+
+  return sendReceiptForRows(supabase, loaded.rows, {
+    orderDate: formatOrderDateItRome(new Date()),
+    orderId: String(loaded.rows[0]?.id ?? ""),
+    totalEur: 0,
+    mode: "confermata",
     resendKey,
     from,
   })
@@ -219,7 +265,9 @@ async function sendReceiptForRows(
     orderDate: string
     orderId: string
     totalEur: number
-    reservationHold: boolean
+    mode: ReceiptMode
+    /** Solo per `richiesta`: data/ora limite per il pagamento */
+    scadenza?: string
     resendKey: string
     from: string
   },
@@ -299,17 +347,19 @@ async function sendReceiptForRows(
     return {
       seat,
       bookingId: booking.id,
-      alreadySent: Boolean(booking.ticketsSentAt),
+      alreadySent: meta.mode === "stripe" ? Boolean(booking.ticketsSentAt) : false,
     }
   })
 
-  if (bookedSeats.every((item) => item.alreadySent)) {
+  const withQr = meta.mode !== "richiesta"
+
+  if (withQr && bookedSeats.every((item) => item.alreadySent)) {
     return { ok: true, alreadySent: true, ticketIds: bookedSeats.map((item) => item.bookingId) }
   }
 
   const attachments: { filename: string; content: string }[] = []
   const sentBookingIds: string[] = []
-  for (const item of bookedSeats) {
+  for (const item of withQr ? bookedSeats : []) {
     if (item.alreadySent) continue
     const seatObj = parseSeatCode(item.seat)
 
@@ -342,7 +392,7 @@ async function sendReceiptForRows(
     }
   }
 
-  if (attachments.length === 0) {
+  if (withQr && attachments.length === 0) {
     return { ok: true, alreadySent: true, ticketIds: bookedSeats.map((item) => item.bookingId) }
   }
 
@@ -350,16 +400,38 @@ async function sendReceiptForRows(
   const senderFrom = formatSenderFromAddress(meta.from)
   const orderDate = meta.orderDate
   const orderId = meta.orderId
-  const totalEur = meta.reservationHold
-    ? (prezzoPrenotazione + dirittiPrenotazione) * uniqueRequestedSeats.length
-    : meta.totalEur
-  const totaleLabel = meta.reservationHold ? "Totale prenotazione" : "Totale Pagato"
-  const holdNote = meta.reservationHold
-    ? `<p style="margin:0 0 18px 0;">Questa prenotazione non include il pagamento online. Il posto è riservato per <strong>48 ore</strong> dal momento della prenotazione. Entro questo termine devi <strong>ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE</strong>: solo dopo il pagamento la prenotazione sarà confermata. Trascorse le 48 ore senza pagamento, la prenotazione viene annullata e il posto torna libero. <strong>Non è possibile pagare al botteghino il giorno dello spettacolo.</strong></p>`
-    : ""
-  const mailSubject = meta.reservationHold
-    ? `Conferma prenotazione – ${spettacoloNome}`
-    : `Ricevuta di Prenotazione – ${spettacoloNome}`
+  const totalEur =
+    meta.mode === "stripe" ? meta.totalEur : (prezzoPrenotazione + dirittiPrenotazione) * uniqueRequestedSeats.length
+  const totaleLabel =
+    meta.mode === "richiesta"
+      ? "Importo da versare all'organizzazione"
+      : meta.mode === "confermata"
+        ? "Totale pagato"
+        : "Totale Pagato"
+  const mailTitle =
+    meta.mode === "richiesta"
+      ? "Prenotazione registrata: da completare entro 48 ore"
+      : meta.mode === "confermata"
+        ? "Prenotazione confermata e pagamento ricevuto"
+        : "Conferma ordine e ricevuta di prenotazione"
+  const introHtml =
+    meta.mode === "richiesta"
+      ? `<p style="margin:0 0 14px 0;">Grazie per la tua prenotazione. Il posto è <strong>riservato per 48 ore</strong>, fino a <strong>${escapeHtml(meta.scadenza ?? "")}</strong>.</p>
+         <div style="border:2px solid #f59e0b;border-radius:10px;padding:14px;background:#fffbeb;margin:0 0 18px 0;">
+           <p style="margin:0 0 8px 0;"><strong>Cosa devi fare:</strong> entro questo termine devi <strong>ritirare e pagare presso l'organizzazione il biglietto fiscale marcato SIAE</strong>. Solo dopo il pagamento la prenotazione sarà confermata e riceverai una seconda email con la ricevuta e il QR code per l'ingresso.</p>
+           <p style="margin:0 0 8px 0;">Trascorse le 48 ore senza pagamento, la prenotazione viene annullata e il posto torna libero.</p>
+           <p style="margin:0;"><strong>Non è possibile pagare al botteghino il giorno dello spettacolo.</strong></p>
+         </div>
+         <p style="margin:0 0 18px 0;">Questa email è un semplice promemoria e <strong>non è un titolo di ingresso</strong>.</p>`
+      : meta.mode === "confermata"
+        ? `<p style="margin:0 0 18px 0;">l'organizzazione ha ricevuto il pagamento e la tua prenotazione è <strong>confermata</strong>. In allegato trovi la ricevuta di prenotazione in PDF con il QR code individuale da mostrare all'ingresso.</p>`
+        : `<p style="margin:0 0 18px 0;">Grazie per la tua prenotazione. In allegato trovi la ricevuta di prenotazione PDF con QR code individuale.</p>`
+  const mailSubject =
+    meta.mode === "richiesta"
+      ? `Prenotazione registrata (da pagare entro 48 ore) – ${spettacoloNome}`
+      : meta.mode === "confermata"
+        ? `Prenotazione confermata – ${spettacoloNome}`
+        : `Ricevuta di Prenotazione – ${spettacoloNome}`
   const seatRowsHtml = uniqueRequestedSeats
     .map((seatCode) => {
       const parsed = parseSeatCode(seatCode)
@@ -379,15 +451,14 @@ async function sendReceiptForRows(
   const html = `
       <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#111827;background:#f9fafb;padding:24px;">
         <div style="max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">
-          <h2 style="margin:0 0 10px 0;font-size:24px;color:#0f172a;">Conferma ordine e ricevuta di prenotazione</h2>
+          <h2 style="margin:0 0 10px 0;font-size:24px;color:#0f172a;">${escapeHtml(mailTitle)}</h2>
           <p style="margin:0 0 14px 0;">Gentile <strong>${escapeHtml(nome)} ${escapeHtml(cognome)}</strong>,</p>
-          <p style="margin:0 0 18px 0;">Grazie per la tua prenotazione. In allegato trovi la ricevuta di prenotazione PDF con QR code individuale.</p>
-          ${holdNote}
+          ${introHtml}
 
           <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#f8fafc;margin-bottom:14px;">
             <div style="font-size:18px;font-weight:700;margin-bottom:8px;">Spettacolo: <span style="color:#0b63f6;">${escapeHtml(spettacoloNome)}</span></div>
-            <div><strong style="font-size:15px;">ID Ordine:</strong> <strong style="font-size:16px;">${escapeHtml(orderId)}</strong></div>
-            <div><strong>Data Ordine:</strong> ${escapeHtml(orderDate)}</div>
+            <div><strong style="font-size:15px;">${meta.mode === "stripe" ? "ID Ordine" : "Codice prenotazione"}:</strong> <strong style="font-size:16px;">${escapeHtml(orderId)}</strong></div>
+            <div><strong>${meta.mode === "stripe" ? "Data Ordine" : "Data prenotazione"}:</strong> ${escapeHtml(orderDate)}</div>
             <div><strong style="font-size:15px;">${totaleLabel}:</strong> <strong style="font-size:18px;color:#0b63f6;">€ ${totalEur.toFixed(2)}</strong></div>
           </div>
 
@@ -439,11 +510,20 @@ async function sendReceiptForRows(
     to: email,
     subject: mailSubject,
     html,
-    attachments,
+    ...(attachments.length > 0 ? { attachments } : {}),
   })
 
   if (mail.error) {
     return { ok: false, error: mail.error.message, code: "RESEND_SEND" }
+  }
+
+  if (!withQr) {
+    // Promemoria senza QR: non segna i biglietti come inviati (arriveranno alla conferma).
+    return {
+      ok: true,
+      ticketIds: bookedSeats.map((item) => item.bookingId),
+      messageId: (mail.data as { id?: string } | null)?.id ?? null,
+    }
   }
 
   const { error: markErr } = await supabase
