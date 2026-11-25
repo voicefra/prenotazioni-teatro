@@ -1,8 +1,8 @@
 export function Stage() {
   return (
-    <div className="w-full max-w-2xl mx-auto mb-12">
+    <div className="w-full max-w-2xl mx-auto mb-6 md:mb-12">
       <div 
-        className="relative h-16 md:h-20 bg-gradient-to-b from-stage to-stage/70 rounded-b-[100%] shadow-lg shadow-stage/30 flex items-center justify-center"
+        className="relative h-12 md:h-20 bg-gradient-to-b from-stage to-stage/70 rounded-b-[100%] shadow-lg shadow-stage/30 flex items-center justify-center"
         style={{
           clipPath: "ellipse(100% 100% at 50% 0%)"
         }}

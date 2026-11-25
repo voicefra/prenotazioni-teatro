@@ -276,13 +276,12 @@ function SpettacoliContent() {
 
   return (
     <main className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-8 md:py-12">
+      <div className="container mx-auto px-4 py-6 md:py-12">
         <div className="mb-8">
           <h1 className="text-2xl md:text-3xl font-bold text-foreground">Scegli il tuo spettacolo</h1>
           <p className="text-sm md:text-base text-muted-foreground mt-2">
             Seleziona uno spettacolo per iniziare la prenotazione.
           </p>
-          <small className="mt-3 block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
         </div>
 
         {isLoading && (
@@ -304,7 +303,7 @@ function SpettacoliContent() {
         )}
 
         {!isLoading && !error && spettacoli.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
             {spettacoli.map((spettacolo) => (
               <article
                 key={spettacolo.id}

@@ -993,8 +993,21 @@ export function TheaterBooking() {
 
   const rows = Object.keys(seatsByRow).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
 
+  const mobileBarCount =
+    bookingMode === "posto_unico" ? Math.max(0, Math.floor(postoUnicoQuantity)) : selectedSeats.length
+  const mobileBarTotal =
+    bookingMode === "posto_unico"
+      ? mobileBarCount * (prezzoBigliettoEur + dirittiPrevenditaEur)
+      : selectedSeats.reduce((sum, s) => sum + s.price, 0) + mobileBarCount * dirittiPrevenditaEur
+  const mobileBarSeatLabels = selectedSeats.map((s) => `${s.row}${s.number}`).join(", ")
+
   const postoUnicoSoldOutUi =
     !isLoadingSeats && bookingMode === "posto_unico" && (postoUnicoPostiRimanenti <= 0 || teatroCapienzaTotale <= 0)
+
+  const mobileBarDisabled =
+    bookingMode === "posto_unico"
+      ? postoUnicoSoldOutUi || postoUnicoPostiRimanenti <= 0 || mobileBarCount < 1
+      : mobileBarCount === 0
 
   const isStripeReturn =
     searchParams.get("canceled") === "true" || searchParams.get("success") === "true"
@@ -1020,8 +1033,8 @@ export function TheaterBooking() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-10 border-b border-border bg-card/50 backdrop-blur-sm">
-        <div className="container mx-auto px-4 py-4">
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm md:sticky md:top-0 md:z-10">
+        <div className="container mx-auto px-3 py-3 md:px-4 md:py-4">
           <div className="mb-3">
             <Link
               href="/spettacoli"
@@ -1060,7 +1073,7 @@ export function TheaterBooking() {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-3 py-4 pb-28 md:px-4 md:py-8 lg:pb-8">
         {bookingConfirmed && (
           <div
             className="mb-6 rounded-xl border border-primary/30 bg-primary/10 px-4 py-4 md:px-6"
@@ -1099,7 +1112,7 @@ export function TheaterBooking() {
           </div>
         )}
 
-        <div className="flex flex-col gap-8 lg:flex-row">
+        <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
           <div className="flex-1">
             <div className="mb-4 rounded-lg border border-border bg-card/60 px-4 py-3 text-sm text-foreground">
               <p>
@@ -1124,8 +1137,8 @@ export function TheaterBooking() {
               </>
             )}
 
-            <div className="rounded-2xl border border-border bg-card/30 p-4 md:p-8">
-              <div className="mb-4 space-y-1 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm text-foreground md:text-base">
+            <div className="rounded-2xl border border-border bg-card/30 px-1.5 py-4 sm:p-4 md:p-8">
+              <div className="mb-4 hidden space-y-1 rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm text-foreground md:block md:text-base">
                 <p>
                   Prenotazione per: <span className="font-semibold">{selectedSpettacoloTitle}</span>
                 </p>
@@ -1166,7 +1179,7 @@ export function TheaterBooking() {
                 </div>
               )}
               {bookingMode !== "posto_unico" && (
-                <div className="space-y-3 md:space-y-4">
+                <div className="space-y-1.5 sm:space-y-3 md:space-y-4">
                   {rows.map((row) => (
                     <SeatRow
                       key={row}
@@ -1228,11 +1241,39 @@ export function TheaterBooking() {
           </div>
         </div>
       </main>
-      <footer className="border-t border-border/60 bg-card/20 px-4 py-4">
+      <footer className="border-t border-border/60 bg-card/20 px-4 pt-4 pb-28 lg:pb-4">
         <div className="container mx-auto">
           <small className="block text-xs leading-relaxed text-muted-foreground">{FISCAL_DISCLAIMER}</small>
         </div>
       </footer>
+
+      {/* Barra fissa su smartphone/tablet: riepilogo e pulsante sempre a portata di dito */}
+      {!bookingConfirmed && !isLoadingSeats && !loadSeatsError && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 px-3 py-3 shadow-[0_-4px_16px_rgba(0,0,0,0.35)] backdrop-blur lg:hidden">
+          <div className="container mx-auto flex items-center justify-between gap-3">
+            <div className="min-w-0 text-sm">
+              <p className="truncate text-muted-foreground">
+                {mobileBarCount === 0
+                  ? bookingMode === "posto_unico"
+                    ? "Scegli quanti posti"
+                    : "Tocca un posto libero"
+                  : `${mobileBarCount} ${mobileBarCount === 1 ? "posto" : "posti"}${
+                      bookingMode === "posto_unico" ? "" : `: ${mobileBarSeatLabels}`
+                    }`}
+              </p>
+              <p className="text-lg font-bold text-primary">€{mobileBarTotal.toFixed(2)}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleCheckout}
+              disabled={mobileBarDisabled}
+              className="shrink-0 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSoloPrenotazione ? "Prenota" : "Procedi al pagamento"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {cancelToastMessage && (
         <div
@@ -1295,7 +1336,7 @@ export function TheaterBooking() {
                   type="text"
                   value={formData.nome}
                   onChange={(e) => handleFormInputChange("nome", e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm"
                   placeholder="Mario"
                   disabled={isSubmittingBooking}
                 />
@@ -1310,7 +1351,7 @@ export function TheaterBooking() {
                   type="text"
                   value={formData.cognome}
                   onChange={(e) => handleFormInputChange("cognome", e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm"
                   placeholder="Rossi"
                   disabled={isSubmittingBooking}
                 />
@@ -1325,7 +1366,7 @@ export function TheaterBooking() {
                   type="email"
                   value={formData.email}
                   onChange={(e) => handleFormInputChange("email", e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm"
                   placeholder="mario@email.it"
                   disabled={isSubmittingBooking}
                 />
@@ -1340,7 +1381,7 @@ export function TheaterBooking() {
                   type="tel"
                   value={formData.telefono}
                   onChange={(e) => handleFormInputChange("telefono", e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm"
                   placeholder="+39 333 1234567"
                   disabled={isSubmittingBooking}
                 />
